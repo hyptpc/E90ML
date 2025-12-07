@@ -20,7 +20,7 @@
 #include "TParticle.h"
 #include "TVector3.h"
 #include "TDatabasePDG.h"
-#include "G4S2S/include/DetectorID.hh"
+#include "../S2SG4/include/DetectorID.hh"
 
 const double TRUNCATE_RATE = 0.3;
 const int MIN_HITS = 4;
@@ -85,13 +85,13 @@ TrackFeature CalculateFeatures(std::vector<HitInfo>& hits, TDatabasePDG* pdgDB) 
     return tf;
 }
 
-void extract_features_unified(TString inputFile, TString outputFile, int label_val) {
+void SaveRoot(TString inputFile, TString outputFile, int label_val) {
     TFile* f = TFile::Open(inputFile);
 
     TTreeReader reader("g4s2s", f);
     TTreeReaderValue<std::vector<TParticle>> tpcHits(reader, "TPC");
     TTreeReaderValue<Int_t> mt(reader, "Mt");
-    TTreeReaderValue<std::vector<int>> trig(reader, "trig");
+    TTreeReaderValue<std::vector<bool>> trig(reader, "trig");
 
     TFile* fout = new TFile(outputFile, "RECREATE");
     TTree* tree = new TTree("tree", "Training Data");
