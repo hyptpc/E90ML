@@ -10,18 +10,28 @@ from common import (
     DEFAULT_FEATURES,
     DEFAULT_LABEL_COLUMN,
     DEFAULT_TREE_NAME,
+    DEFAULT_LABEL_MAPPING,
+    DEFAULT_METRICS_NAME,
+    DEFAULT_MODEL_NAME,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_PLOTS_DIR,
+    DEFAULT_PREDICTIONS_NAME,
+    DEFAULT_PTH_DIR,
+    DEFAULT_TUNED_PARAMS_NAME,
+    DEFAULT_TUNE_DIR,
     E90Dataset,
-    _resolve_path,
-    _resolve_paths,
     create_model_from_params,
     load_config,
+    resolve_named_dir,
+    resolve_named_path,
+    resolve_data_files,
     resolve_device,
 )
 
 
 def _prepare_data(config, base_dir, fraction, is_train=True):
     data_cfg = config.get("data", {})
-    files = _resolve_paths(data_cfg.get("files", []), base_dir)
+    files = resolve_data_files(data_cfg, base_dir)
     if not files:
         raise ValueError("No data files specified in config.data.files")
 
@@ -29,6 +39,8 @@ def _prepare_data(config, base_dir, fraction, is_train=True):
     features = data_cfg.get("feature_columns") or DEFAULT_FEATURES
     label_column = data_cfg.get("label_column", DEFAULT_LABEL_COLUMN)
     label_mapping = data_cfg.get("label_mapping")
+    if label_mapping is None:
+        label_mapping = DEFAULT_LABEL_MAPPING
 
     dataset = E90Dataset(
         files=files,
@@ -71,8 +83,13 @@ def train_final(config, base_dir):
 
     dataset, features, num_classes = _prepare_data(config, base_dir, train_fraction, is_train=True)
 
-    best_params_path = training_cfg.get("best_params_path") or tuning_cfg.get("best_params_path") or "best_params.json"
-    best_params_path = _resolve_path(best_params_path, base_dir)
+    best_params_raw = training_cfg.get("best_params_path") or tuning_cfg.get("best_params_path") or DEFAULT_TUNED_PARAMS_NAME
+    best_params_path = resolve_named_path(
+        best_params_raw,
+        default_dir=DEFAULT_TUNE_DIR,
+        default_name=DEFAULT_TUNED_PARAMS_NAME,
+        base_dir=base_dir,
+    )
     if not best_params_path.exists():
         raise FileNotFoundError(
             f"Best parameter file not found at {best_params_path}. Run tuning first or update the config."
@@ -170,17 +187,27 @@ def train_final(config, base_dir):
             f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}"
         )
 
-    model_output_path = _resolve_path(training_cfg.get("model_output_path", "e90_final_model.pth"), base_dir)
+    model_output_path = resolve_named_path(
+        training_cfg.get("model_output_path"),
+        default_dir=DEFAULT_PTH_DIR,
+        default_name=DEFAULT_MODEL_NAME,
+        base_dir=base_dir,
+    )
     model_output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), model_output_path)
     print(f"Final model saved to '{model_output_path}'.")
 
-    plots_dir = _resolve_path(training_cfg.get("plots_dir", "outputs/plots"), base_dir)
+    plots_dir = resolve_named_dir(training_cfg.get("plots_dir"), default_dir=DEFAULT_PLOTS_DIR, base_dir=base_dir)
     _plot_history(history["train_loss"], history["val_loss"], "Loss", plots_dir / "loss.png")
     _plot_history(history["train_acc"], history["val_acc"], "Accuracy", plots_dir / "accuracy.png")
     print(f"Saved training curves to '{plots_dir}'.")
 
-    metrics_output_path = _resolve_path(training_cfg.get("metrics_output_path", "train_metrics.json"), base_dir)
+    metrics_output_path = resolve_named_path(
+        training_cfg.get("metrics_output_path"),
+        default_dir=DEFAULT_OUTPUT_DIR,
+        default_name=DEFAULT_METRICS_NAME,
+        base_dir=base_dir,
+    )
     metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_payload = {
         "train_loss": history["train_loss"],
@@ -198,8 +225,11 @@ def train_final(config, base_dir):
         json.dump(metrics_payload, f, indent=4)
     print(f"Saved metrics to '{metrics_output_path}'.")
 
-    predictions_output_path = _resolve_path(
-        training_cfg.get("predictions_output_path", "predictions.csv"), base_dir
+    predictions_output_path = resolve_named_path(
+        training_cfg.get("predictions_output_path"),
+        default_dir=DEFAULT_OUTPUT_DIR,
+        default_name=DEFAULT_PREDICTIONS_NAME,
+        base_dir=base_dir,
     )
     predictions_output_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -25,6 +25,25 @@ DEFAULT_FEATURES = [
 DEFAULT_TREE_NAME = "train_data"
 DEFAULT_LABEL_COLUMN = "label"
 DEFAULT_RANDOM_STATE = 42
+DEFAULT_INPUT_DIR = Path("../../data/input")
+DEFAULT_OUTPUT_DIR = Path("../../data/output")
+DEFAULT_PLOTS_DIR = DEFAULT_OUTPUT_DIR / "plots"
+DEFAULT_TUNE_DIR = Path("../tune")
+DEFAULT_PTH_DIR = Path("../pth")
+
+DEFAULT_TUNED_PARAMS_NAME = "tuned_params.json"
+DEFAULT_TUNING_SUMMARY_NAME = "tuning_trials.csv"
+DEFAULT_MODEL_NAME = "model.pth"
+DEFAULT_METRICS_NAME = "metrics.json"
+DEFAULT_PREDICTIONS_NAME = "predictions.csv"
+DEFAULT_REACTION_LABELS = {"SigmaNCusp": 1, "QFLambda": 2, "QFSigmaZ": 3}
+DEFAULT_LABEL_MAPPING = {
+    "signal_labels": [DEFAULT_REACTION_LABELS["SigmaNCusp"]],
+    "background_labels": [
+        DEFAULT_REACTION_LABELS["QFLambda"],
+        DEFAULT_REACTION_LABELS["QFSigmaZ"],
+    ],
+}
 
 
 def _ensure_list(value) -> list:
@@ -50,6 +69,69 @@ def _resolve_path(value: str, base_dir: Path) -> Path:
     if not p.is_absolute():
         p = (base_dir / p).resolve()
     return p
+
+
+def resolve_data_files(data_cfg: dict, base_dir: Path) -> list:
+    """
+    Resolve input file paths using a shared input directory by default.
+    """
+    files_cfg = data_cfg.get("files", [])
+    input_dir_cfg = data_cfg.get("input_dir", DEFAULT_INPUT_DIR)
+    input_dir = _resolve_path(input_dir_cfg, base_dir)
+
+    if isinstance(files_cfg, dict):
+        file_names = list(files_cfg.values())
+    else:
+        file_names = _ensure_list(files_cfg)
+
+    if not file_names:
+        return []
+
+    resolved = _resolve_paths(file_names, input_dir)
+    missing = [p for p in resolved if not Path(p).exists()]
+    if missing:
+        raise FileNotFoundError(f"Data file(s) not found: {missing}")
+    return resolved
+
+
+def resolve_named_path(
+    value: Optional[str],
+    default_dir: Path,
+    default_name: str,
+    base_dir: Path,
+) -> Path:
+    """
+    Resolve a path where the config can pass just a filename (no slashes)
+    and we place it under a default directory.
+    """
+    default_dir = _resolve_path(default_dir, base_dir)
+    if not value:
+        return (default_dir / default_name).resolve()
+
+    value_path = Path(value)
+    if value_path.name == value and value_path.parent == Path("."):
+        return (default_dir / value_path.name).resolve()
+
+    return _resolve_path(value, base_dir)
+
+
+def resolve_named_dir(
+    value: Optional[str],
+    default_dir: Path,
+    base_dir: Path,
+) -> Path:
+    """
+    Resolve a directory where the config can pass just a directory name.
+    """
+    default_dir = _resolve_path(default_dir, base_dir)
+    if not value:
+        return default_dir
+
+    value_path = Path(value)
+    if value_path.name == value and value_path.parent == Path("."):
+        return (default_dir / value_path.name).resolve()
+
+    return _resolve_path(value, base_dir)
 
 
 def load_config(config_path: str):

@@ -11,11 +11,16 @@ from common import (
     DEFAULT_FEATURES,
     DEFAULT_LABEL_COLUMN,
     DEFAULT_TREE_NAME,
+    DEFAULT_LABEL_MAPPING,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_TUNE_DIR,
+    DEFAULT_TUNED_PARAMS_NAME,
+    DEFAULT_TUNING_SUMMARY_NAME,
     E90Dataset,
-    _resolve_path,
-    _resolve_paths,
     create_model_from_params,
     load_config,
+    resolve_named_path,
+    resolve_data_files,
     resolve_device,
 )
 
@@ -32,7 +37,7 @@ def _float_range(cfg, key, default_min, default_max):
 
 def _prepare_data(config, base_dir, fraction, is_train=True):
     data_cfg = config.get("data", {})
-    files = _resolve_paths(data_cfg.get("files", []), base_dir)
+    files = resolve_data_files(data_cfg, base_dir)
     if not files:
         raise ValueError("No data files specified in config.data.files")
 
@@ -40,6 +45,8 @@ def _prepare_data(config, base_dir, fraction, is_train=True):
     features = data_cfg.get("feature_columns") or DEFAULT_FEATURES
     label_column = data_cfg.get("label_column", DEFAULT_LABEL_COLUMN)
     label_mapping = data_cfg.get("label_mapping")
+    if label_mapping is None:
+        label_mapping = DEFAULT_LABEL_MAPPING
 
     dataset = E90Dataset(
         files=files,
@@ -142,9 +149,23 @@ def objective_factory(config, base_dir):
 def run_tuning(config, base_dir):
     tuning_cfg = config.get("tuning", {})
     direction = tuning_cfg.get("direction", "maximize")
-    best_params_path = _resolve_path(tuning_cfg.get("best_params_path", "best_params.json"), base_dir)
+    best_params_path = resolve_named_path(
+        tuning_cfg.get("best_params_path"),
+        default_dir=DEFAULT_TUNE_DIR,
+        default_name=DEFAULT_TUNED_PARAMS_NAME,
+        base_dir=base_dir,
+    )
     trials_path = tuning_cfg.get("study_summary_path")
-    trials_path = _resolve_path(trials_path, base_dir) if trials_path else None
+    trials_path = (
+        resolve_named_path(
+            trials_path,
+            default_dir=DEFAULT_OUTPUT_DIR,
+            default_name=DEFAULT_TUNING_SUMMARY_NAME,
+            base_dir=base_dir,
+        )
+        if trials_path is not None
+        else None
+    )
 
     objective, n_trials = objective_factory(config, base_dir)
     study = optuna.create_study(direction=direction)

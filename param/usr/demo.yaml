@@ -1,17 +1,17 @@
-metadata:
-  purpose: "Binary classification (signal vs background) config for ML training/tuning"
-  notes: "Paths are resolved relative to this file unless absolute."
+# E90ML config
+# - labels: SigmaNCusp=1 (signal), QFLambda=2, QFSigmaZ=3
+# - Input ROOTs live in data/input
+# - Tuned params go to param/tune
+# - Models go to param/pth
+# - Metrics/predictions/plots go to data/output
 
 data:
-  files:
-    - ../../data/input/SigmaNCusp.root
-    - ../../data/input/QFLambda.root
-    - ../../data/input/QFSigmaZ.root
+  files:                        # ROOT file names under data/input
+    SigmaNCusp: SigmaNCusp.root
+    QFLambda: QFLambda.root
+    QFSigmaZ: QFSigmaZ.root
   tree_name: g4s2s
   label_column: label
-  label_mapping:
-    signal_labels: [1]          # SigmaNCusp
-    background_labels: [2, 3]   # QFLambda, QFSigmaZ
   feature_columns:
     - t0_theta
     - t0_phi
@@ -30,26 +30,26 @@ tuning:
   epochs: 10
   n_trials: 25
   batch_size_options: [64, 128, 256]
-  num_workers: 2
+  num_workers: 8
   direction: maximize
   search_space:
     n_layers: {min: 2, max: 4}
     hidden_units: {min: 64, max: 256}
     dropout: {min: 0.1, max: 0.5}
     lr: {min: 1.0e-4, max: 1.0e-2}
-  best_params_path: ../tune/tuned_params.json
-  study_summary_path: ../../data/output/tuning_trials.csv
+  best_params_path: tuned_params.json    # saved to param/tune
+  study_summary_path: tuning_trials.csv  # saved to data/output
 
 training:
   fraction: 1.0                  # Use full dataset for final training
   val_split: 0.2
   epochs: 50
-  num_workers: 2
-  model_output_path: ../../data/output/model.pth
-  best_params_path: ../tune/tuned_params.json
-  metrics_output_path: ../../data/output/train_metrics.json
-  predictions_output_path: ../../data/output/predictions.csv
-  plots_dir: ../../data/output/plots
+  num_workers: 8
+  model_output_path: demo.pth                # saved to param/pth
+  best_params_path: tuned_params.json        # read from param/tune; should match tuning output
+  metrics_output_path: demo_metrics.json     # saved to data/output
+  predictions_output_path: demo_predictions.csv  # saved to data/output
+  plots_dir: plots                           # subdirectory under data/output
   # batch_size: 128              # Optional override instead of tuned batch size
 
 device: auto                     # Set to "cuda" or "cpu" to force a device
