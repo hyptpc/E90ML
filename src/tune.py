@@ -18,7 +18,7 @@ from common import (
     load_config,
     resolve_data_files,
     resolve_device,
-    resolve_with_default_dir,
+    resolve_dir,
     load_data,
 )
 
@@ -174,10 +174,10 @@ def run_tuning(config, base_dir):
     best_params_raw = tuning_cfg.get("best_params_path")
     if not best_params_raw:
         raise ValueError("Config must set tuning.best_params_path.")
-    best_params_path = resolve_with_default_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
+    best_params_path = resolve_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
 
     trials_raw = tuning_cfg.get("study_summary_path")
-    trials_path = resolve_with_default_dir(trials_raw, DEFAULT_OUTPUT_DIR, base_dir) if trials_raw else None
+    trials_path = resolve_dir(trials_raw, DEFAULT_OUTPUT_DIR, base_dir) if trials_raw else None
 
     objective, n_trials = objective_factory(config, base_dir)
     study = optuna.create_study(direction=direction)

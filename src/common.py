@@ -9,9 +9,10 @@ import yaml
 import uproot
 from torch.utils.data import Dataset as TorchDataset
 
-# Standard output directories (used when config provides filenames only)
+# Standard output directories
 DEFAULT_TUNE_DIR = Path("../tune")
 DEFAULT_PTH_DIR = Path("../pth")
+DEFAULT_INPUT_DIR = Path("../../data/input")
 DEFAULT_OUTPUT_DIR = Path("../../data/output")
 DEFAULT_PLOTS_DIR = DEFAULT_OUTPUT_DIR / "plots"
 
@@ -51,7 +52,7 @@ def _resolve_path(value: str, base_dir: Path) -> Path:
     return p
 
 
-def resolve_with_default_dir(value: str, default_dir: Path, base_dir: Path) -> Path:
+def resolve_dir(value: str, default_dir: Path, base_dir: Path) -> Path:
     """
     If value is a bare filename, place it under default_dir. Otherwise resolve relative to config.
     """
@@ -118,15 +119,6 @@ def load_data(
     Load ROOT files into a single DataFrame, optionally downsample, and remap labels.
     Returns a tuple of (dataframe, num_classes).
     """
-    if not 0 < fraction <= 1:
-        raise ValueError("fraction must be between 0 and 1.")
-    if not tree_name:
-        raise ValueError("tree_name must be provided in the config.")
-    if not label_column:
-        raise ValueError("label_column must be provided in the config.")
-    if not features:
-        raise ValueError("feature_columns must be provided in the config.")
-
     feature_cols = features
     dfs = []
 
@@ -142,8 +134,6 @@ def load_data(
 
             dfs.append(df[feature_cols + [label_column]])
 
-    if not dfs:
-        raise ValueError("No data loaded from files.")
 
     data = pd.concat(dfs, ignore_index=True)
 
@@ -155,8 +145,6 @@ def load_data(
     if label_mapping:
         sig_labels = set(label_mapping.get("signal_labels", []))
         bg_labels = set(label_mapping.get("background_labels", []))
-        if not sig_labels or not bg_labels:
-            raise ValueError("label_mapping must define non-empty signal_labels and background_labels.")
 
         def map_label(x):
             if x in sig_labels:

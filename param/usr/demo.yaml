@@ -27,8 +27,8 @@ tuning:
   seed: 42
   fraction: 0.3
   val_split: 0.2
-  epochs: 10
-  n_trials: 25
+  epochs: 20
+  n_trials: 50
   batch_size_options: [64, 128, 256]
   num_workers: 8
   direction: maximize

@@ -23,7 +23,7 @@ from common import (
     load_config,
     resolve_data_files,
     resolve_device,
-    resolve_with_default_dir,
+    resolve_dir,
     load_data,
 )
 
@@ -106,7 +106,7 @@ def train_final(config, base_dir):
     val_features = scaler.transform(val_features)
 
     # Save Scaler for future inference
-    scaler_output_path = resolve_with_default_dir(training_cfg["scaler_output_path"], DEFAULT_PTH_DIR, base_dir)
+    scaler_output_path = resolve_dir(training_cfg["scaler_output_path"], DEFAULT_PTH_DIR, base_dir)
     scaler_output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(scaler_output_path, "wb") as f:
         pickle.dump(scaler, f)
@@ -118,9 +118,7 @@ def train_final(config, base_dir):
 
     # Load Tuned Hyperparameters
     best_params_raw = training_cfg.get("best_params_path") or tuning_cfg.get("best_params_path")
-    if not best_params_raw:
-        raise ValueError("Config must set training.best_params_path or tuning.best_params_path.")
-    best_params_path = resolve_with_default_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
+    best_params_path = resolve_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
     if not best_params_path.exists():
         raise FileNotFoundError(
             f"Best parameter file not found at {best_params_path}. Run tuning first or update the config."
@@ -244,19 +242,19 @@ def train_final(config, base_dir):
     print(f"Training finished. Best Val Acc: {best_val_acc:.4f}")
     model.load_state_dict(best_model_wts)
 
-    model_output_path = resolve_with_default_dir(training_cfg["model_output_path"], DEFAULT_PTH_DIR, base_dir)
+    model_output_path = resolve_dir(training_cfg["model_output_path"], DEFAULT_PTH_DIR, base_dir)
     model_output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), model_output_path)
     print(f"Best model saved to '{model_output_path}'.")
 
     # Plotting
-    plots_dir = resolve_with_default_dir(training_cfg["plots_dir"], DEFAULT_PLOTS_DIR, base_dir)
+    plots_dir = resolve_dir(training_cfg["plots_dir"], DEFAULT_PLOTS_DIR, base_dir)
     _plot_history(history["train_loss"], history["val_loss"], "Loss", plots_dir / "loss.png")
     _plot_history(history["train_acc"], history["val_acc"], "Accuracy", plots_dir / "accuracy.png")
     print(f"Saved training curves to '{plots_dir}'.")
 
     # Metrics
-    metrics_output_path = resolve_with_default_dir(training_cfg["metrics_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
+    metrics_output_path = resolve_dir(training_cfg["metrics_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
     metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_payload = {
         "train_loss": history["train_loss"],
@@ -275,9 +273,8 @@ def train_final(config, base_dir):
     print(f"Saved metrics to '{metrics_output_path}'.")
 
     # Predictions (on FULL dataset or Test set)
-    # Here we predict on the Validation set to see performance on unseen data
-    # (Predicting on training set isn't very useful for evaluation)
-    predictions_output_path = resolve_with_default_dir(training_cfg["predictions_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
+    # Here we predict on the Validation dataset
+    predictions_output_path = resolve_dir(training_cfg["predictions_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
     predictions_output_path.parent.mkdir(parents=True, exist_ok=True)
 
     val_loader_seq = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
