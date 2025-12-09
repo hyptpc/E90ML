@@ -63,17 +63,20 @@ def resolve_dir(value: str, default_dir: Path, base_dir: Path) -> Path:
 
 
 def resolve_data_files(data_cfg: dict, base_dir: Path) -> list:
-    """Resolve the list of ROOT files to load, relative to the config directory."""
+    """Resolve the list of ROOT files to load, preferring the shared input directory."""
     files_cfg = data_cfg.get("files")
     if not files_cfg:
         return []
+
+    input_dir = data_cfg.get("input_dir", DEFAULT_INPUT_DIR)
+    input_dir = _resolve_path(str(input_dir), base_dir)
 
     if isinstance(files_cfg, dict):
         file_paths = list(files_cfg.values())
     else:
         file_paths = _ensure_list(files_cfg)
 
-    resolved = _resolve_paths(file_paths, base_dir)
+    resolved = _resolve_paths(file_paths, input_dir)
     missing = [p for p in resolved if not Path(p).exists()]
     if missing:
         raise FileNotFoundError(f"Data file(s) not found: {missing}")
@@ -104,6 +107,17 @@ def resolve_device(device_pref=None) -> torch.device:
     if device_str == "cuda":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _resolve_seed(local_seed, global_seed):
+    """
+    Returns int seed if provided, otherwise None to let ops be random.
+    Accepts empty string as 'no seed'.
+    """
+    seed = local_seed if local_seed not in (None, "") else global_seed
+    if seed in (None, ""):
+        return None
+    return int(seed)
 
 
 def load_data(

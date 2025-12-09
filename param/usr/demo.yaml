@@ -24,7 +24,7 @@ data:
   fraction: 1.0
     
 tuning:
-  seed: 42
+  seed: 42               # RNG seed for tuning splits/shuffling (leave blank to disable)
   fraction: 0.3
   val_split: 0.2
   epochs: 20
@@ -37,21 +37,29 @@ tuning:
     hidden_units: {min: 64, max: 256}
     dropout: {min: 0.1, max: 0.5}
     lr: {min: 1.0e-4, max: 1.0e-2}
-  best_params_path: tuned_params.json         # saved under param/tune
-  study_summary_path: tuning_trials.csv       # saved under data/output
+  tune_params_file: tuned_params.json         # saved under param/tune
+  study_summary_file: tuning_trials.csv       # saved under data/output
 
 training:
-  seed: 42
+  seed: 90                                     # RNG seed for training splits/shuffling (leave blank to disable)
   fraction: 1.0
   val_split: 0.2
   epochs: 50
   patience: 10
   num_workers: 8
-  model_output_path: demo.pth                   # saved under param/pth
-  scaler_output_path: demo_scaler.pkl           # saved under param/pth
-  best_params_path: tuned_params.json           # read from param/tune
-  metrics_output_path: demo_metrics.json        # saved under data/output
-  predictions_output_path: demo_predictions.csv # saved under data/output
-  plots_dir: plots                              # saved under data/output/plots
+  checkpoint_file: demo.pth                     # saved under param/pth (used for resume; same as model output)
+  model_output_file: demo.pth                   # saved under param/pth
+  scaler_output_file: demo_scaler.pkl           # saved under param/pth
+  best_params_file: tuned_params.json           # read from param/tune
+  metrics_output_file: demo_metrics.json        # saved under data/output
+  predictions_output_file: demo_predictions.csv # saved under data/output
+  plot_output_file: demo.png                    # saved under data/output
+
+test:
+  fraction: 1.0
+  batch_size: 128
+  num_workers: 8
+  metrics_output_file: demo_test_metrics.json        # saved under data/output
+  predictions_output_file: demo_test_predictions.csv # saved under data/output
 
 device: auto

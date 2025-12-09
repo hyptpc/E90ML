@@ -41,9 +41,18 @@ with open(config_path) as f:
 data_cfg = cfg.get("data", {})
 tune_cfg = cfg.get("tuning", {})
 
+def get(cfg, *keys):
+    for k in keys:
+        v = cfg.get(k)
+        if v not in (None, ""):
+            return v
+    return None
+
 files = data_cfg.get("files", {})
 tree = data_cfg.get("tree_name")
 features = data_cfg.get("feature_columns") or []
+best_params_file = get(tune_cfg, "tune_params_file", "best_params_file", "best_params_path")
+trials_file = get(tune_cfg, "study_summary_file", "study_summary_path")
 
 summary = [
     f"Config: {config_path}",
@@ -54,8 +63,8 @@ summary = [
     f"Val split: {tune_cfg.get('val_split', 'N/A')}",
     f"Epochs: {tune_cfg.get('epochs', 'N/A')}",
     f"Trials: {tune_cfg.get('n_trials', 'N/A')}",
-    f"Best params path: {tune_cfg.get('best_params_path', 'N/A')}",
-    f"Trials CSV: {tune_cfg.get('study_summary_path', 'N/A')}",
+    f"Best params file: {best_params_file or 'N/A'}",
+    f"Trials CSV: {trials_file or 'N/A'}",
 ]
 
 print("Running hyperparameter tuning with config summary:")

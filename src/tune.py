@@ -13,14 +13,22 @@ from common import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_LABEL_MAPPING,
     DEFAULT_TUNE_DIR,
-    _resolve_path,
     create_model_from_params,
     load_config,
     resolve_data_files,
     resolve_device,
     resolve_dir,
+    _resolve_seed,
     load_data,
 )
+
+
+def _get_config_value(cfg: dict, *keys: str):
+    for key in keys:
+        value = cfg.get(key)
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def _int_range(cfg, key):
@@ -37,8 +45,7 @@ def objective_factory(config, base_dir):
     """Create an Optuna objective that uses stratified splits and leak-safe scaling."""
     data_cfg = config.get("data", {})
     tuning_cfg = config.get("tuning", {})
-    seed = tuning_cfg.get("seed") or config.get("seed")
-    seed = int(seed)
+    seed = _resolve_seed(tuning_cfg.get("seed"), config.get("seed"))
 
     files = resolve_data_files(data_cfg, base_dir)
     if not files:
@@ -127,16 +134,16 @@ def objective_factory(config, base_dir):
         # Training Loop
         for epoch in range(epochs):
             model.train()
-            for inputs, labels in train_loader:
+            for inputs, labels_batch in train_loader:
                 inputs = inputs.to(device)
-                labels = labels.to(device)
+                labels_batch = labels_batch.to(device)
                 optimizer.zero_grad()
                 if num_classes == 2:
                     outputs = model(inputs).squeeze(1)
-                    loss = criterion(outputs, labels.float())
+                    loss = criterion(outputs, labels_batch.float())
                 else:
                     outputs = model(inputs)
-                    loss = criterion(outputs, labels)
+                    loss = criterion(outputs, labels_batch)
                 loss.backward()
                 optimizer.step()
 
@@ -145,17 +152,17 @@ def objective_factory(config, base_dir):
             correct = 0
             total = 0
             with torch.no_grad():
-                for inputs, labels in val_loader:
+                for inputs, labels_batch in val_loader:
                     inputs = inputs.to(device)
-                    labels = labels.to(device)
+                    labels_batch = labels_batch.to(device)
                     if num_classes == 2:
                         outputs = model(inputs).squeeze(1)
                         predicted = (torch.sigmoid(outputs) > 0.5).long()
                     else:
                         outputs = model(inputs)
                         predicted = torch.argmax(outputs, dim=1)
-                    total += labels.size(0)
-                    correct += (predicted == labels).sum().item()
+                    total += labels_batch.size(0)
+                    correct += (predicted == labels_batch).sum().item()
 
             accuracy = correct / total if total > 0 else 0.0
             trial.report(accuracy, epoch)
@@ -171,12 +178,12 @@ def objective_factory(config, base_dir):
 def run_tuning(config, base_dir):
     tuning_cfg = config.get("tuning", {})
     direction = tuning_cfg["direction"]
-    best_params_raw = tuning_cfg.get("best_params_path")
+    best_params_raw = _get_config_value(tuning_cfg, "tune_params_file", "best_params_file", "best_params_path")
     if not best_params_raw:
-        raise ValueError("Config must set tuning.best_params_path.")
+        raise ValueError("Config must set tuning.tune_params_file (or best_params_file/best_params_path).")
     best_params_path = resolve_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
 
-    trials_raw = tuning_cfg.get("study_summary_path")
+    trials_raw = _get_config_value(tuning_cfg, "study_summary_file", "study_summary_path")
     trials_path = resolve_dir(trials_raw, DEFAULT_OUTPUT_DIR, base_dir) if trials_raw else None
 
     objective, n_trials = objective_factory(config, base_dir)

@@ -1,7 +1,10 @@
 import argparse
+import copy
 import json
 import pickle
-import copy
+from pathlib import Path
+from typing import Optional
+
 import pandas as pd
 
 import torch
@@ -18,30 +21,69 @@ from common import (
     DEFAULT_PLOTS_DIR,
     DEFAULT_LABEL_MAPPING,
     DEFAULT_TUNE_DIR,
-    _resolve_path,
     create_model_from_params,
     load_config,
     resolve_data_files,
     resolve_device,
     resolve_dir,
+    _resolve_seed,
     load_data,
 )
 
 
-def _plot_history(train_values, val_values, ylabel, out_path):
+def _get_config_value(cfg: dict, *keys: str) -> Optional[str]:
+    for key in keys:
+        value = cfg.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _plot_training_curves(history, out_path: Path):
     import matplotlib.pyplot as plt
 
-    epochs = range(1, len(train_values) + 1)
-    plt.figure()
-    plt.plot(epochs, train_values, label="train")
-    plt.plot(epochs, val_values, label="val")
-    plt.xlabel("Epoch")
-    plt.ylabel(ylabel)
+    plt.rcParams["font.family"] = "TimesNewRoman"
+    plt.rcParams["mathtext.fontset"] = "stix"
+    plt.rcParams["font.size"] = 12
+    plt.rcParams["axes.linewidth"] = 1.0
+    plt.rcParams["axes.grid"] = False
+    plt.rcParams["xtick.direction"] = "in"
+    plt.rcParams["ytick.direction"] = "in"
+    plt.rcParams["xtick.minor.visible"] = True
+    plt.rcParams["ytick.minor.visible"] = True
+    plt.rcParams["xtick.major.size"] = 10
+    plt.rcParams["ytick.major.size"] = 10
+    plt.rcParams["xtick.minor.size"] = 5
+    plt.rcParams["ytick.minor.size"] = 5
+    plt.rcParams["figure.subplot.left"] = 0.12
+    plt.rcParams["figure.subplot.right"] = 0.8
+    plt.rcParams["figure.subplot.top"] = 0.88
+    plt.rcParams["figure.subplot.bottom"] = 0.12
+
+    fig = plt.figure(figsize=(10, 4))
+
+    plt.subplot(1, 2, 1)
+    plt.plot(history["train_acc"], c="blue", label="train", linestyle="--")
+    plt.plot(history["val_acc"], c="red", label="val", linestyle="-")
     plt.legend()
-    plt.tight_layout()
+    plt.xlabel("epoch", fontsize=10)
+    plt.ylabel("accuracy", fontsize=10)
+    plt.title("Training and validation accuracy")
+    plt.grid()
+
+    plt.subplot(1, 2, 2)
+    plt.plot(history["train_loss"], c="blue", label="train", linestyle="--")
+    plt.plot(history["val_loss"], c="red", label="val", linestyle="-")
+    plt.legend()
+    plt.xlabel("epoch", fontsize=10)
+    plt.ylabel("loss", fontsize=10)
+    plt.title("Training and validation loss")
+    plt.grid()
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
     plt.savefig(out_path)
-    plt.close()
+    plt.close(fig)
 
 
 def train_final(config, base_dir):
@@ -52,10 +94,7 @@ def train_final(config, base_dir):
     training_cfg = config.get("training", {})
     tuning_cfg = config.get("tuning", {})
 
-    seed = training_cfg.get("seed") or config.get("seed")
-    if seed is None:
-        raise ValueError("Config must define 'seed' (preferably under training.seed) for reproducible splits.")
-    seed = int(seed)
+    seed = _resolve_seed(training_cfg.get("seed"), config.get("seed"))
 
     files = resolve_data_files(data_cfg, base_dir)
     if not files:
@@ -106,7 +145,10 @@ def train_final(config, base_dir):
     val_features = scaler.transform(val_features)
 
     # Save Scaler for future inference
-    scaler_output_path = resolve_dir(training_cfg["scaler_output_path"], DEFAULT_PTH_DIR, base_dir)
+    scaler_output_raw = _get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
+    if not scaler_output_raw:
+        raise ValueError("Config must set training.scaler_output_file.")
+    scaler_output_path = resolve_dir(scaler_output_raw, DEFAULT_PTH_DIR, base_dir)
     scaler_output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(scaler_output_path, "wb") as f:
         pickle.dump(scaler, f)
@@ -117,12 +159,25 @@ def train_final(config, base_dir):
     val_dataset = E90Dataset(val_features, val_labels)
 
     # Load Tuned Hyperparameters
-    best_params_raw = training_cfg.get("best_params_path") or tuning_cfg.get("best_params_path")
+    best_params_raw = _get_config_value(training_cfg, "best_params_file", "best_params_path") or _get_config_value(
+        tuning_cfg, "tune_params_file", "best_params_file", "best_params_path"
+    )
+    if not best_params_raw:
+        raise ValueError("Config must set training.best_params_file or tuning.tune_params_file.")
+
     best_params_path = resolve_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
     if not best_params_path.exists():
         raise FileNotFoundError(
             f"Best parameter file not found at {best_params_path}. Run tuning first or update the config."
         )
+
+    model_output_raw = _get_config_value(training_cfg, "model_output_file", "model_output_path")
+    if not model_output_raw:
+        raise ValueError("Config must set training.model_output_file.")
+    model_output_path = resolve_dir(model_output_raw, DEFAULT_PTH_DIR, base_dir)
+
+    checkpoint_raw = _get_config_value(training_cfg, "checkpoint_file", "checkpoint_path")
+    checkpoint_path = resolve_dir(checkpoint_raw or model_output_raw, DEFAULT_PTH_DIR, base_dir)
 
     with best_params_path.open() as f:
         params = json.load(f)
@@ -163,8 +218,29 @@ def train_final(config, base_dir):
     best_val_acc = 0.0
     best_model_wts = copy.deepcopy(model.state_dict())
     no_improve_count = 0
+    start_epoch = 0
 
-    for epoch in range(epochs):
+    if checkpoint_path.exists():
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            model.load_state_dict(checkpoint.get("model_state_dict", model.state_dict()))
+            if "optimizer_state_dict" in checkpoint:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+            ckpt_history = checkpoint.get("history")
+            if ckpt_history:
+                history = {key: ckpt_history.get(key, []) for key in history}
+            best_val_acc = float(checkpoint.get("best_val_acc", best_val_acc))
+            best_model_wts = checkpoint.get("best_model_state_dict", best_model_wts)
+            no_improve_count = int(checkpoint.get("no_improve_count", no_improve_count))
+            start_epoch = int(checkpoint.get("epoch", 0))
+            print(f"Resuming training from epoch {start_epoch + 1} using checkpoint '{checkpoint_path}'.")
+        else:
+            model.load_state_dict(checkpoint)
+            best_model_wts = copy.deepcopy(model.state_dict())
+            print(f"Loaded weights-only checkpoint from '{checkpoint_path}'. Training will restart from epoch 1.")
+
+    for epoch in range(start_epoch, epochs):
         model.train()
         running_loss = 0.0
         correct = 0
@@ -233,7 +309,19 @@ def train_final(config, base_dir):
             # Optional: save checkpoint here
         else:
             no_improve_count += 1
-        
+
+        checkpoint_payload = {
+            "epoch": epoch + 1,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_model_state_dict": best_model_wts,
+            "best_val_acc": best_val_acc,
+            "history": history,
+            "no_improve_count": no_improve_count,
+        }
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(checkpoint_payload, checkpoint_path)
+
         if no_improve_count >= patience:
             print(f"Early stopping triggered. No improvement for {patience} epochs.")
             break
@@ -242,19 +330,26 @@ def train_final(config, base_dir):
     print(f"Training finished. Best Val Acc: {best_val_acc:.4f}")
     model.load_state_dict(best_model_wts)
 
-    model_output_path = resolve_dir(training_cfg["model_output_path"], DEFAULT_PTH_DIR, base_dir)
     model_output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), model_output_path)
     print(f"Best model saved to '{model_output_path}'.")
 
     # Plotting
-    plots_dir = resolve_dir(training_cfg["plots_dir"], DEFAULT_PLOTS_DIR, base_dir)
-    _plot_history(history["train_loss"], history["val_loss"], "Loss", plots_dir / "loss.png")
-    _plot_history(history["train_acc"], history["val_acc"], "Accuracy", plots_dir / "accuracy.png")
-    print(f"Saved training curves to '{plots_dir}'.")
+    plot_output_raw = _get_config_value(
+        training_cfg, "plot_output_file", "plot_output_path", "plots_path", "plots_dir"
+    )
+    plot_output_path = resolve_dir(plot_output_raw or "training_curves.png", DEFAULT_OUTPUT_DIR, base_dir)
+    if plot_output_path.suffix == "":
+        plot_output_path = plot_output_path / "training_curves.png"
+
+    _plot_training_curves(history, plot_output_path)
+    print(f"Saved training curves to '{plot_output_path}'.")
 
     # Metrics
-    metrics_output_path = resolve_dir(training_cfg["metrics_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
+    metrics_output_raw = _get_config_value(training_cfg, "metrics_output_file", "metrics_output_path")
+    if not metrics_output_raw:
+        raise ValueError("Config must set training.metrics_output_file.")
+    metrics_output_path = resolve_dir(metrics_output_raw, DEFAULT_OUTPUT_DIR, base_dir)
     metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_payload = {
         "train_loss": history["train_loss"],
@@ -274,7 +369,12 @@ def train_final(config, base_dir):
 
     # Predictions (on FULL dataset or Test set)
     # Here we predict on the Validation dataset
-    predictions_output_path = resolve_dir(training_cfg["predictions_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
+    predictions_output_raw = _get_config_value(
+        training_cfg, "predictions_output_file", "predictions_output_path"
+    )
+    if not predictions_output_raw:
+        raise ValueError("Config must set training.predictions_output_file.")
+    predictions_output_path = resolve_dir(predictions_output_raw, DEFAULT_OUTPUT_DIR, base_dir)
     predictions_output_path.parent.mkdir(parents=True, exist_ok=True)
 
     val_loader_seq = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
