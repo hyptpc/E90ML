@@ -1,17 +1,17 @@
 E90ML
 =====
 
-Minimal docs to run tuning/training with the simplified config layout.
+Minimal docs to run tuning/training with the explicit (no defaults) config layout.
 
 Setup
-- Place ROOT files under `data/input` (default lookup path).
-- Set the filenames only in `param/usr/demo.yaml` under `data.files`.
-- Labels are fixed in code: SigmaNCusp=1, QFLambda=2, QFSigmaZ=3. SigmaNCusp is treated as signal; the others are background.
-- If you pass just a filename (no slashes) in the config, the code drops it into a fixed location:
-  - Tuning results (`best_params_path`) → `param/tune/`
-  - Tuning trial CSV (`study_summary_path`) → `data/output/`
-  - Model weights (`model_output_path`) → `param/pth/`
-  - Metrics/predictions/plots (`metrics_output_path`, `predictions_output_path`, `plots_dir`) → `data/output/`
+- Input ROOTs are resolved relative to the config; in the sample YAML you can list filenames only (looked up under `data/input`).
+- Outputs accept filenames only; the code saves them under fixed folders:
+  - Tuning params → `param/tune/`
+  - Tuning trials CSV → `data/output/`
+  - Model/scaler → `param/pth/`
+  - Metrics/predictions/plots → `data/output/`
+- Set seeds under `tuning.seed` and `training.seed` (or top-level `seed`) for reproducible splits.
+- Include label mapping in the config if labels need remapping (see sample YAML).
 
 Commands
 - Tuning: `python -m src.tune -c param/usr/demo.yaml`

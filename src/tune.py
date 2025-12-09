@@ -1,94 +1,108 @@
 import argparse
 import json
-
 import optuna
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 from common import (
-    DEFAULT_FEATURES,
-    DEFAULT_LABEL_COLUMN,
-    DEFAULT_TREE_NAME,
-    DEFAULT_LABEL_MAPPING,
-    DEFAULT_OUTPUT_DIR,
-    DEFAULT_TUNE_DIR,
-    DEFAULT_TUNED_PARAMS_NAME,
-    DEFAULT_TUNING_SUMMARY_NAME,
     E90Dataset,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_LABEL_MAPPING,
+    DEFAULT_TUNE_DIR,
+    _resolve_path,
     create_model_from_params,
     load_config,
-    resolve_named_path,
     resolve_data_files,
     resolve_device,
+    resolve_with_default_dir,
+    load_data,
 )
 
 
-def _int_range(cfg, key, default_min, default_max):
-    item = cfg.get(key, {})
-    return int(item.get("min", default_min)), int(item.get("max", default_max))
+def _int_range(cfg, key):
+    item = cfg.get(key)
+    return int(item["min"]), int(item["max"])
 
 
-def _float_range(cfg, key, default_min, default_max):
-    item = cfg.get(key, {})
-    return float(item.get("min", default_min)), float(item.get("max", default_max))
+def _float_range(cfg, key):
+    item = cfg.get(key)
+    return float(item["min"]), float(item["max"])
 
 
-def _prepare_data(config, base_dir, fraction, is_train=True):
+def objective_factory(config, base_dir):
+    """Create an Optuna objective that uses stratified splits and leak-safe scaling."""
     data_cfg = config.get("data", {})
+    tuning_cfg = config.get("tuning", {})
+    seed = tuning_cfg.get("seed") or config.get("seed")
+    seed = int(seed)
+
     files = resolve_data_files(data_cfg, base_dir)
     if not files:
-        raise ValueError("No data files specified in config.data.files")
+        raise ValueError("Config must provide data.files with at least one entry.")
 
-    tree_name = data_cfg.get("tree_name", DEFAULT_TREE_NAME)
-    features = data_cfg.get("feature_columns") or DEFAULT_FEATURES
-    label_column = data_cfg.get("label_column", DEFAULT_LABEL_COLUMN)
-    label_mapping = data_cfg.get("label_mapping")
-    if label_mapping is None:
-        label_mapping = DEFAULT_LABEL_MAPPING
+    tree_name = data_cfg.get("tree_name")
+    features = data_cfg.get("feature_columns")
+    label_column = data_cfg.get("label_column")
+    label_mapping = DEFAULT_LABEL_MAPPING
+    tune_fraction = float(tuning_cfg["fraction"])
+    val_split = float(tuning_cfg["val_split"])
 
-    dataset = E90Dataset(
+    dataset_df, num_classes = load_data(
         files=files,
         tree_name=tree_name,
         features=features,
         label_column=label_column,
         label_mapping=label_mapping,
-        fraction=fraction,
-        is_train=is_train,
+        fraction=tune_fraction,
+        random_state=seed,
     )
-    num_classes = 2 if label_mapping else int(data_cfg.get("num_classes") or dataset.num_classes)
-    return dataset, features, num_classes
 
+    feature_matrix = dataset_df[features].values
+    labels = dataset_df[label_column].values
 
-def objective_factory(config, base_dir):
-    tuning_cfg = config.get("tuning", {})
-
-    tune_fraction = float(tuning_cfg.get("fraction", 0.3))
-    val_split = float(tuning_cfg.get("val_split", 0.2))
-    num_workers = int(tuning_cfg.get("num_workers", 2))
-    epochs = int(tuning_cfg.get("epochs", 10))
-    n_trials = int(tuning_cfg.get("n_trials", 20))
-    batch_size_options = tuning_cfg.get("batch_size_options", [64, 128, 256])
-    search_space_cfg = tuning_cfg.get("search_space", {})
+    # Tuning parameters
+    num_workers = int(tuning_cfg["num_workers"])
+    epochs = int(tuning_cfg["epochs"])
+    n_trials = int(tuning_cfg["n_trials"])
+    batch_size_options = tuning_cfg["batch_size_options"]
+    search_space_cfg = tuning_cfg["search_space"]
     device = resolve_device(tuning_cfg.get("device") or config.get("device"))
 
-    n_layers_min, n_layers_max = _int_range(search_space_cfg, "n_layers", 2, 4)
-    hidden_min, hidden_max = _int_range(search_space_cfg, "hidden_units", 64, 256)
-    dropout_min, dropout_max = _float_range(search_space_cfg, "dropout", 0.1, 0.5)
-    lr_min, lr_max = _float_range(search_space_cfg, "lr", 1e-4, 1e-2)
-
-    full_dataset, features, num_classes = _prepare_data(config, base_dir, tune_fraction, is_train=True)
+    # Search space (read exactly from config)
+    n_layers_min, n_layers_max = _int_range(search_space_cfg, "n_layers")
+    hidden_min, hidden_max = _int_range(search_space_cfg, "hidden_units")
+    dropout_min, dropout_max = _float_range(search_space_cfg, "dropout")
+    lr_min, lr_max = _float_range(search_space_cfg, "lr")
 
     def objective(trial):
-        train_size = int((1 - val_split) * len(full_dataset))
-        val_size = len(full_dataset) - train_size
-        if train_size == 0 or val_size == 0:
-            raise ValueError("Not enough data to perform the requested train/val split.")
+        # 1. Stratified Split (prevents leakage and handles imbalance in split)
+        train_features, val_features, train_labels, val_labels = train_test_split(
+            feature_matrix,
+            labels,
+            test_size=val_split,
+            stratify=labels,
+            random_state=seed,
+        )
 
-        train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+        # 2. Fit Scaler on TRAIN ONLY (prevents leakage)
+        scaler = StandardScaler()
+        train_features = scaler.fit_transform(train_features)
+        val_features = scaler.transform(val_features)
+
+        # 3. Create Datasets
+        train_dataset = E90Dataset(train_features, train_labels)
+        val_dataset = E90Dataset(val_features, val_labels)
 
         batch_size = trial.suggest_categorical("batch_size", batch_size_options)
+        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+        # Model params
         params = {
             "n_layers": trial.suggest_int("n_layers", n_layers_min, n_layers_max),
             "hidden_units": trial.suggest_int("hidden_units", hidden_min, hidden_max),
@@ -99,11 +113,18 @@ def objective_factory(config, base_dir):
 
         lr = trial.suggest_float("lr", lr_min, lr_max, log=True)
         optimizer = optim.Adam(model.parameters(), lr=lr)
-        criterion = nn.BCEWithLogitsLoss() if num_classes == 2 else nn.CrossEntropyLoss()
 
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        # Class Imbalance Handling (Weighted Loss)
+        if num_classes == 2:
+            # Calculate pos_weight based on training data
+            num_pos = (train_labels == 1).sum()
+            num_neg = (train_labels == 0).sum()
+            pos_weight = torch.tensor(num_neg / num_pos, dtype=torch.float32).to(device) if num_pos > 0 else None
+            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            criterion = nn.CrossEntropyLoss()
 
+        # Training Loop
         for epoch in range(epochs):
             model.train()
             for inputs, labels in train_loader:
@@ -119,6 +140,7 @@ def objective_factory(config, base_dir):
                 loss.backward()
                 optimizer.step()
 
+            # Validation
             model.eval()
             correct = 0
             total = 0
@@ -148,24 +170,14 @@ def objective_factory(config, base_dir):
 
 def run_tuning(config, base_dir):
     tuning_cfg = config.get("tuning", {})
-    direction = tuning_cfg.get("direction", "maximize")
-    best_params_path = resolve_named_path(
-        tuning_cfg.get("best_params_path"),
-        default_dir=DEFAULT_TUNE_DIR,
-        default_name=DEFAULT_TUNED_PARAMS_NAME,
-        base_dir=base_dir,
-    )
-    trials_path = tuning_cfg.get("study_summary_path")
-    trials_path = (
-        resolve_named_path(
-            trials_path,
-            default_dir=DEFAULT_OUTPUT_DIR,
-            default_name=DEFAULT_TUNING_SUMMARY_NAME,
-            base_dir=base_dir,
-        )
-        if trials_path is not None
-        else None
-    )
+    direction = tuning_cfg["direction"]
+    best_params_raw = tuning_cfg.get("best_params_path")
+    if not best_params_raw:
+        raise ValueError("Config must set tuning.best_params_path.")
+    best_params_path = resolve_with_default_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
+
+    trials_raw = tuning_cfg.get("study_summary_path")
+    trials_path = resolve_with_default_dir(trials_raw, DEFAULT_OUTPUT_DIR, base_dir) if trials_raw else None
 
     objective, n_trials = objective_factory(config, base_dir)
     study = optuna.create_study(direction=direction)

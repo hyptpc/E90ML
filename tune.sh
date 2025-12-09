@@ -54,8 +54,8 @@ summary = [
     f"Val split: {tune_cfg.get('val_split', 'N/A')}",
     f"Epochs: {tune_cfg.get('epochs', 'N/A')}",
     f"Trials: {tune_cfg.get('n_trials', 'N/A')}",
-    f"Best params path: {tune_cfg.get('best_params_path', 'tuned_params.json')} (relative defaults to param/tune)",
-    f"Trials CSV: {tune_cfg.get('study_summary_path', 'tuning_trials.csv')} (relative defaults to data/output)",
+    f"Best params path: {tune_cfg.get('best_params_path', 'N/A')}",
+    f"Trials CSV: {tune_cfg.get('study_summary_path', 'N/A')}",
 ]
 
 print("Running hyperparameter tuning with config summary:")

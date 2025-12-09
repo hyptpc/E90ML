@@ -1,58 +1,31 @@
 import argparse
 import json
+import pickle
+import copy
+import pandas as pd
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 from common import (
-    DEFAULT_FEATURES,
-    DEFAULT_LABEL_COLUMN,
-    DEFAULT_TREE_NAME,
-    DEFAULT_LABEL_MAPPING,
-    DEFAULT_METRICS_NAME,
-    DEFAULT_MODEL_NAME,
-    DEFAULT_OUTPUT_DIR,
-    DEFAULT_PLOTS_DIR,
-    DEFAULT_PREDICTIONS_NAME,
-    DEFAULT_PTH_DIR,
-    DEFAULT_TUNED_PARAMS_NAME,
-    DEFAULT_TUNE_DIR,
     E90Dataset,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_PTH_DIR,
+    DEFAULT_PLOTS_DIR,
+    DEFAULT_LABEL_MAPPING,
+    DEFAULT_TUNE_DIR,
+    _resolve_path,
     create_model_from_params,
     load_config,
-    resolve_named_dir,
-    resolve_named_path,
     resolve_data_files,
     resolve_device,
+    resolve_with_default_dir,
+    load_data,
 )
-
-
-def _prepare_data(config, base_dir, fraction, is_train=True):
-    data_cfg = config.get("data", {})
-    files = resolve_data_files(data_cfg, base_dir)
-    if not files:
-        raise ValueError("No data files specified in config.data.files")
-
-    tree_name = data_cfg.get("tree_name", DEFAULT_TREE_NAME)
-    features = data_cfg.get("feature_columns") or DEFAULT_FEATURES
-    label_column = data_cfg.get("label_column", DEFAULT_LABEL_COLUMN)
-    label_mapping = data_cfg.get("label_mapping")
-    if label_mapping is None:
-        label_mapping = DEFAULT_LABEL_MAPPING
-
-    dataset = E90Dataset(
-        files=files,
-        tree_name=tree_name,
-        features=features,
-        label_column=label_column,
-        label_mapping=label_mapping,
-        fraction=fraction,
-        is_train=is_train,
-    )
-    num_classes = 2 if label_mapping else int(data_cfg.get("num_classes") or dataset.num_classes)
-    return dataset, features, num_classes
 
 
 def _plot_history(train_values, val_values, ylabel, out_path):
@@ -72,24 +45,82 @@ def _plot_history(train_values, val_values, ylabel, out_path):
 
 
 def train_final(config, base_dir):
+    """
+    Train the final model with stratified split, leak-safe scaling, class weighting, and early stopping.
+    """
+    data_cfg = config.get("data", {})
     training_cfg = config.get("training", {})
     tuning_cfg = config.get("tuning", {})
 
-    train_fraction = float(training_cfg.get("fraction", 1.0))
-    val_split = float(training_cfg.get("val_split", 0.2))
-    num_workers = int(training_cfg.get("num_workers", 2))
-    epochs = int(training_cfg.get("epochs", 50))
+    seed = training_cfg.get("seed") or config.get("seed")
+    if seed is None:
+        raise ValueError("Config must define 'seed' (preferably under training.seed) for reproducible splits.")
+    seed = int(seed)
+
+    files = resolve_data_files(data_cfg, base_dir)
+    if not files:
+        raise ValueError("Config must provide data.files with at least one entry.")
+
+    tree_name = data_cfg.get("tree_name")
+    features = data_cfg.get("feature_columns")
+    label_column = data_cfg.get("label_column")
+    label_mapping = data_cfg.get("label_mapping")
+    if label_mapping is None:
+        label_mapping = DEFAULT_LABEL_MAPPING
+    if tree_name is None or features is None or label_column is None:
+        raise ValueError("Config must define tree_name, feature_columns, and label_column under data.")
+
+    train_fraction = float(training_cfg["fraction"])
+    val_split = float(training_cfg["val_split"])
+    num_workers = int(training_cfg["num_workers"])
+    epochs = int(training_cfg["epochs"])
+    patience = int(training_cfg["patience"])
     batch_size_override = training_cfg.get("batch_size")
 
-    dataset, features, num_classes = _prepare_data(config, base_dir, train_fraction, is_train=True)
-
-    best_params_raw = training_cfg.get("best_params_path") or tuning_cfg.get("best_params_path") or DEFAULT_TUNED_PARAMS_NAME
-    best_params_path = resolve_named_path(
-        best_params_raw,
-        default_dir=DEFAULT_TUNE_DIR,
-        default_name=DEFAULT_TUNED_PARAMS_NAME,
-        base_dir=base_dir,
+    # Load Data (Full)
+    full_df, num_classes = load_data(
+        files=files,
+        tree_name=tree_name,
+        features=features,
+        label_column=label_column,
+        label_mapping=label_mapping,
+        fraction=train_fraction,
+        random_state=seed,
     )
+
+    feature_matrix = full_df[features].values
+    labels = full_df[label_column].values
+
+    # Stratified Split
+    train_features, val_features, train_labels, val_labels = train_test_split(
+        feature_matrix,
+        labels,
+        test_size=val_split,
+        stratify=labels,
+        random_state=seed,
+    )
+
+    # Scale (Fit on Train ONLY)
+    scaler = StandardScaler()
+    train_features = scaler.fit_transform(train_features)
+    val_features = scaler.transform(val_features)
+
+    # Save Scaler for future inference
+    scaler_output_path = resolve_with_default_dir(training_cfg["scaler_output_path"], DEFAULT_PTH_DIR, base_dir)
+    scaler_output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(scaler_output_path, "wb") as f:
+        pickle.dump(scaler, f)
+    print(f"Scaler saved to '{scaler_output_path}'.")
+
+    # Datasets & Loaders
+    train_dataset = E90Dataset(train_features, train_labels)
+    val_dataset = E90Dataset(val_features, val_labels)
+
+    # Load Tuned Hyperparameters
+    best_params_raw = training_cfg.get("best_params_path") or tuning_cfg.get("best_params_path")
+    if not best_params_raw:
+        raise ValueError("Config must set training.best_params_path or tuning.best_params_path.")
+    best_params_path = resolve_with_default_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
     if not best_params_path.exists():
         raise FileNotFoundError(
             f"Best parameter file not found at {best_params_path}. Run tuning first or update the config."
@@ -107,13 +138,6 @@ def train_final(config, base_dir):
     batch_size = batch_size_override or int(params.get("batch_size", 128))
     lr = float(params.get("lr", 1e-3))
 
-    train_size = int((1 - val_split) * len(dataset))
-    val_size = len(dataset) - train_size
-    if train_size == 0 or val_size == 0:
-        raise ValueError("Not enough data to perform the requested train/val split.")
-
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
@@ -122,9 +146,25 @@ def train_final(config, base_dir):
     model = create_model_from_params(model_params, input_dim=len(features), num_classes=num_classes).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCEWithLogitsLoss() if num_classes == 2 else nn.CrossEntropyLoss()
 
+    # Weighted Loss
+    if num_classes == 2:
+        num_pos = (train_labels == 1).sum()
+        num_neg = (train_labels == 0).sum()
+        pos_weight = torch.tensor(num_neg / num_pos, dtype=torch.float32).to(device) if num_pos > 0 else None
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        if pos_weight is not None:
+            print(f"Using Weighted BCE Loss. Pos Weight: {pos_weight.item():.4f}")
+        else:
+            print("Using BCE Loss without class weighting (no positive labels found).")
+    else:
+        criterion = nn.CrossEntropyLoss()
+
+    # Training State
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+    best_val_acc = 0.0
+    best_model_wts = copy.deepcopy(model.state_dict())
+    no_improve_count = 0
 
     for epoch in range(epochs):
         model.train()
@@ -187,35 +227,44 @@ def train_final(config, base_dir):
             f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}"
         )
 
-    model_output_path = resolve_named_path(
-        training_cfg.get("model_output_path"),
-        default_dir=DEFAULT_PTH_DIR,
-        default_name=DEFAULT_MODEL_NAME,
-        base_dir=base_dir,
-    )
+        # Early Stopping & Best Model Saving
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_model_wts = copy.deepcopy(model.state_dict())
+            no_improve_count = 0
+            # Optional: save checkpoint here
+        else:
+            no_improve_count += 1
+        
+        if no_improve_count >= patience:
+            print(f"Early stopping triggered. No improvement for {patience} epochs.")
+            break
+
+    # Load best model weights
+    print(f"Training finished. Best Val Acc: {best_val_acc:.4f}")
+    model.load_state_dict(best_model_wts)
+
+    model_output_path = resolve_with_default_dir(training_cfg["model_output_path"], DEFAULT_PTH_DIR, base_dir)
     model_output_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), model_output_path)
-    print(f"Final model saved to '{model_output_path}'.")
+    print(f"Best model saved to '{model_output_path}'.")
 
-    plots_dir = resolve_named_dir(training_cfg.get("plots_dir"), default_dir=DEFAULT_PLOTS_DIR, base_dir=base_dir)
+    # Plotting
+    plots_dir = resolve_with_default_dir(training_cfg["plots_dir"], DEFAULT_PLOTS_DIR, base_dir)
     _plot_history(history["train_loss"], history["val_loss"], "Loss", plots_dir / "loss.png")
     _plot_history(history["train_acc"], history["val_acc"], "Accuracy", plots_dir / "accuracy.png")
     print(f"Saved training curves to '{plots_dir}'.")
 
-    metrics_output_path = resolve_named_path(
-        training_cfg.get("metrics_output_path"),
-        default_dir=DEFAULT_OUTPUT_DIR,
-        default_name=DEFAULT_METRICS_NAME,
-        base_dir=base_dir,
-    )
+    # Metrics
+    metrics_output_path = resolve_with_default_dir(training_cfg["metrics_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
     metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_payload = {
         "train_loss": history["train_loss"],
         "val_loss": history["val_loss"],
         "train_acc": history["train_acc"],
         "val_acc": history["val_acc"],
-        "best_val_acc": max(history["val_acc"]) if history["val_acc"] else None,
-        "epochs": epochs,
+        "best_val_acc": best_val_acc,
+        "epochs_run": len(history["train_loss"]),
         "batch_size": batch_size,
         "learning_rate": lr,
         "num_classes": num_classes,
@@ -225,19 +274,17 @@ def train_final(config, base_dir):
         json.dump(metrics_payload, f, indent=4)
     print(f"Saved metrics to '{metrics_output_path}'.")
 
-    predictions_output_path = resolve_named_path(
-        training_cfg.get("predictions_output_path"),
-        default_dir=DEFAULT_OUTPUT_DIR,
-        default_name=DEFAULT_PREDICTIONS_NAME,
-        base_dir=base_dir,
-    )
+    # Predictions (on FULL dataset or Test set)
+    # Here we predict on the Validation set to see performance on unseen data
+    # (Predicting on training set isn't very useful for evaluation)
+    predictions_output_path = resolve_with_default_dir(training_cfg["predictions_output_path"], DEFAULT_OUTPUT_DIR, base_dir)
     predictions_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    full_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    val_loader_seq = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     model.eval()
     records = []
     with torch.no_grad():
-        for inputs, labels in full_loader:
+        for inputs, labels in val_loader_seq:
             inputs = inputs.to(device)
             outputs = model(inputs)
             if num_classes == 2:
@@ -264,10 +311,8 @@ def train_final(config, base_dir):
                         row[f"prob_{cls_idx}"] = float(prob_vec[cls_idx])
                     records.append(row)
 
-    import pandas as pd
-
     pd.DataFrame.from_records(records).to_csv(predictions_output_path, index=False)
-    print(f"Saved predictions to '{predictions_output_path}'.")
+    print(f"Saved predictions (validation set) to '{predictions_output_path}'.")
 
 
 def parse_args():

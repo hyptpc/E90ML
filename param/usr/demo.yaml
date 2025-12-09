@@ -1,13 +1,12 @@
 # E90ML config
-# - labels: SigmaNCusp=1 (signal), QFLambda=2, QFSigmaZ=3
-# - Input ROOTs live in data/input
-# - Tuned params go to param/tune
-# - Models go to param/pth
-# - Metrics/predictions/plots go to data/output
+
+metadata:
+  purpose: "Binary classification (SigmaNCusp vs background)"
+  notes: "Labels: SigmaNCusp=1 (signal), QFLambda=2, QFSigmaZ=3."
 
 data:
-  files:                        # ROOT file names under data/input
-    SigmaNCusp: SigmaNCusp.root
+  files:
+    SigmaNCusp: SigmaNCusp.root   # looked up under data/input
     QFLambda: QFLambda.root
     QFSigmaZ: QFSigmaZ.root
   tree_name: g4s2s
@@ -22,11 +21,12 @@ data:
     - t2_theta
     - t2_phi
     - t2_dedx
-  fraction: 1.0                  # Downsample ratio (use <1.0 for quick tests)
+  fraction: 1.0
     
 tuning:
-  fraction: 0.3                  # Downsample ratio for faster tuning
-  val_split: 0.2                 # Validation split during tuning
+  seed: 42
+  fraction: 0.3
+  val_split: 0.2
   epochs: 10
   n_trials: 25
   batch_size_options: [64, 128, 256]
@@ -37,19 +37,21 @@ tuning:
     hidden_units: {min: 64, max: 256}
     dropout: {min: 0.1, max: 0.5}
     lr: {min: 1.0e-4, max: 1.0e-2}
-  best_params_path: tuned_params.json    # saved to param/tune
-  study_summary_path: tuning_trials.csv  # saved to data/output
+  best_params_path: tuned_params.json         # saved under param/tune
+  study_summary_path: tuning_trials.csv       # saved under data/output
 
 training:
-  fraction: 1.0                  # Use full dataset for final training
+  seed: 42
+  fraction: 1.0
   val_split: 0.2
   epochs: 50
+  patience: 10
   num_workers: 8
-  model_output_path: demo.pth                # saved to param/pth
-  best_params_path: tuned_params.json        # read from param/tune; should match tuning output
-  metrics_output_path: demo_metrics.json     # saved to data/output
-  predictions_output_path: demo_predictions.csv  # saved to data/output
-  plots_dir: plots                           # subdirectory under data/output
-  # batch_size: 128              # Optional override instead of tuned batch size
+  model_output_path: demo.pth                   # saved under param/pth
+  scaler_output_path: demo_scaler.pkl           # saved under param/pth
+  best_params_path: tuned_params.json           # read from param/tune
+  metrics_output_path: demo_metrics.json        # saved under data/output
+  predictions_output_path: demo_predictions.csv # saved under data/output
+  plots_dir: plots                              # saved under data/output/plots
 
-device: auto                     # Set to "cuda" or "cpu" to force a device
+device: auto

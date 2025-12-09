@@ -1,41 +1,21 @@
 import json
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 import yaml
 import uproot
-from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset as TorchDataset
 
-# Default column names expected in the ROOT trees
-DEFAULT_FEATURES = [
-    "t0_theta",
-    "t0_phi",
-    "t0_dedx",
-    "t1_theta",
-    "t1_phi",
-    "t1_dedx",
-    "t2_theta",
-    "t2_phi",
-    "t2_dedx",
-]
-DEFAULT_TREE_NAME = "train_data"
-DEFAULT_LABEL_COLUMN = "label"
-DEFAULT_RANDOM_STATE = 42
-DEFAULT_INPUT_DIR = Path("../../data/input")
-DEFAULT_OUTPUT_DIR = Path("../../data/output")
-DEFAULT_PLOTS_DIR = DEFAULT_OUTPUT_DIR / "plots"
+# Standard output directories (used when config provides filenames only)
 DEFAULT_TUNE_DIR = Path("../tune")
 DEFAULT_PTH_DIR = Path("../pth")
+DEFAULT_OUTPUT_DIR = Path("../../data/output")
+DEFAULT_PLOTS_DIR = DEFAULT_OUTPUT_DIR / "plots"
 
-DEFAULT_TUNED_PARAMS_NAME = "tuned_params.json"
-DEFAULT_TUNING_SUMMARY_NAME = "tuning_trials.csv"
-DEFAULT_MODEL_NAME = "model.pth"
-DEFAULT_METRICS_NAME = "metrics.json"
-DEFAULT_PREDICTIONS_NAME = "predictions.csv"
+# Default label mapping (SigmaNCusp=1, QFLambda=2, QFSigmaZ=3)
 DEFAULT_REACTION_LABELS = {"SigmaNCusp": 1, "QFLambda": 2, "QFSigmaZ": 3}
 DEFAULT_LABEL_MAPPING = {
     "signal_labels": [DEFAULT_REACTION_LABELS["SigmaNCusp"]],
@@ -71,80 +51,43 @@ def _resolve_path(value: str, base_dir: Path) -> Path:
     return p
 
 
+def resolve_with_default_dir(value: str, default_dir: Path, base_dir: Path) -> Path:
+    """
+    If value is a bare filename, place it under default_dir. Otherwise resolve relative to config.
+    """
+    candidate = Path(value)
+    if candidate.is_absolute() or candidate.parent != Path("."):
+        return _resolve_path(value, base_dir)
+    return _resolve_path(default_dir / candidate.name, base_dir)
+
+
 def resolve_data_files(data_cfg: dict, base_dir: Path) -> list:
-    """
-    Resolve input file paths using a shared input directory by default.
-    """
-    files_cfg = data_cfg.get("files", [])
-    input_dir_cfg = data_cfg.get("input_dir", DEFAULT_INPUT_DIR)
-    input_dir = _resolve_path(input_dir_cfg, base_dir)
-
-    if isinstance(files_cfg, dict):
-        file_names = list(files_cfg.values())
-    else:
-        file_names = _ensure_list(files_cfg)
-
-    if not file_names:
+    """Resolve the list of ROOT files to load, relative to the config directory."""
+    files_cfg = data_cfg.get("files")
+    if not files_cfg:
         return []
 
-    resolved = _resolve_paths(file_names, input_dir)
+    if isinstance(files_cfg, dict):
+        file_paths = list(files_cfg.values())
+    else:
+        file_paths = _ensure_list(files_cfg)
+
+    resolved = _resolve_paths(file_paths, base_dir)
     missing = [p for p in resolved if not Path(p).exists()]
     if missing:
         raise FileNotFoundError(f"Data file(s) not found: {missing}")
     return resolved
 
 
-def resolve_named_path(
-    value: Optional[str],
-    default_dir: Path,
-    default_name: str,
-    base_dir: Path,
-) -> Path:
-    """
-    Resolve a path where the config can pass just a filename (no slashes)
-    and we place it under a default directory.
-    """
-    default_dir = _resolve_path(default_dir, base_dir)
-    if not value:
-        return (default_dir / default_name).resolve()
-
-    value_path = Path(value)
-    if value_path.name == value and value_path.parent == Path("."):
-        return (default_dir / value_path.name).resolve()
-
-    return _resolve_path(value, base_dir)
-
-
-def resolve_named_dir(
-    value: Optional[str],
-    default_dir: Path,
-    base_dir: Path,
-) -> Path:
-    """
-    Resolve a directory where the config can pass just a directory name.
-    """
-    default_dir = _resolve_path(default_dir, base_dir)
-    if not value:
-        return default_dir
-
-    value_path = Path(value)
-    if value_path.name == value and value_path.parent == Path("."):
-        return (default_dir / value_path.name).resolve()
-
-    return _resolve_path(value, base_dir)
-
-
 def load_config(config_path: str):
     path = Path(config_path).expanduser()
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
-
     with path.open() as f:
         if path.suffix.lower() in {".yml", ".yaml"}:
             config = yaml.safe_load(f)
         else:
             config = json.load(f)
-
     return config or {}, path.parent.resolve()
 
 
@@ -159,80 +102,85 @@ def resolve_device(device_pref=None) -> torch.device:
         return torch.device("cpu")
     if device_str == "cuda":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def load_data(
+    files: list,
+    tree_name: str,
+    features: list,
+    label_column: str,
+    label_mapping: Optional[dict],
+    fraction: float,
+    random_state: Optional[int],
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Load ROOT files into a single DataFrame, optionally downsample, and remap labels.
+    Returns a tuple of (dataframe, num_classes).
+    """
+    if not 0 < fraction <= 1:
+        raise ValueError("fraction must be between 0 and 1.")
+    if not tree_name:
+        raise ValueError("tree_name must be provided in the config.")
+    if not label_column:
+        raise ValueError("label_column must be provided in the config.")
+    if not features:
+        raise ValueError("feature_columns must be provided in the config.")
+
+    feature_cols = features
+    dfs = []
+
+    for fpath in files:
+        with uproot.open(fpath) as file:
+            df = file[tree_name].arrays(library="pd")
+            if label_column not in df.columns:
+                raise ValueError(f"Label column '{label_column}' not found in {fpath}.")
+
+            missing = [col for col in feature_cols if col not in df.columns]
+            if missing:
+                raise ValueError(f"Missing feature columns in {fpath}: {missing}")
+
+            dfs.append(df[feature_cols + [label_column]])
+
+    if not dfs:
+        raise ValueError("No data loaded from files.")
+
+    data = pd.concat(dfs, ignore_index=True)
+
+    if fraction < 1.0:
+        data = data.sample(frac=fraction, random_state=random_state).reset_index(drop=True)
+    else:
+        data = data.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
+
+    if label_mapping:
+        sig_labels = set(label_mapping.get("signal_labels", []))
+        bg_labels = set(label_mapping.get("background_labels", []))
+        if not sig_labels or not bg_labels:
+            raise ValueError("label_mapping must define non-empty signal_labels and background_labels.")
+
+        def map_label(x):
+            if x in sig_labels:
+                return 1
+            if x in bg_labels:
+                return 0
+            raise ValueError(f"Label {x} not in signal_labels or background_labels.")
+
+        data[label_column] = data[label_column].apply(map_label)
+        num_classes = 2
+    else:
+        num_classes = int(np.unique(data[label_column]).size)
+
+    return data, num_classes
+
+
 class E90Dataset(TorchDataset):
-    def __init__(
-        self,
-        files,
-        tree_name: str = DEFAULT_TREE_NAME,
-        features=None,
-        label_column: str = DEFAULT_LABEL_COLUMN,
-        label_mapping: Optional[dict] = None,
-        fraction: float = 1.0,
-        scaler: Optional[StandardScaler] = None,
-        is_train: bool = True,
-        random_state: int = DEFAULT_RANDOM_STATE,
-    ):
-        """
-        label_mapping: optional dict with keys:
-            signal_labels: list of labels to map to 1
-            background_labels: list of labels to map to 0
-        """
-        if not 0 < fraction <= 1:
-            raise ValueError("fraction must be between 0 and 1.")
-
-        feature_cols = features or DEFAULT_FEATURES
-        dfs = []
-
-        for fpath in _ensure_list(files):
-            with uproot.open(fpath) as file:
-                df = file[tree_name].arrays(library="pd")
-                if label_column not in df.columns:
-                    raise ValueError(f"Label column '{label_column}' not found in {fpath}.")
-                missing = [col for col in feature_cols if col not in df.columns]
-                if missing:
-                    raise ValueError(f"Missing feature columns in {fpath}: {missing}")
-                dfs.append(df[feature_cols + [label_column]])
-
-        self.data = pd.concat(dfs, ignore_index=True)
-
-        if fraction < 1.0:
-            self.data = (
-                self.data.sample(frac=fraction, random_state=random_state)
-                .reset_index(drop=True)
-            )
-        else:
-            self.data = self.data.sample(frac=1, random_state=random_state).reset_index(drop=True)
-
-        # Optional label remapping for binary classification
-        self.label_mapping = label_mapping
-        if label_mapping:
-            sig_labels = set(label_mapping.get("signal_labels", []))
-            bg_labels = set(label_mapping.get("background_labels", []))
-            if not sig_labels or not bg_labels:
-                raise ValueError("label_mapping must define non-empty signal_labels and background_labels.")
-            def map_label(x):
-                if x in sig_labels:
-                    return 1
-                if x in bg_labels:
-                    return 0
-                raise ValueError(f"Label {x} not in signal_labels or background_labels.")
-            self.data[label_column] = self.data[label_column].apply(map_label)
-
-        self.X = self.data[feature_cols].values.astype(np.float32)
-        self.y = self.data[label_column].values.astype(np.int64)
-        self.num_classes = 2 if label_mapping else int(np.unique(self.y).size)
-
-        if is_train:
-            self.scaler = StandardScaler()
-            self.X = self.scaler.fit_transform(self.X)
-        else:
-            self.scaler = scaler
-            if self.scaler:
-                self.X = self.scaler.transform(self.X)
+    """
+    A simple Dataset wrapper for Tensor data.
+    Does NOT handle file loading or scaling logic to avoid leakage.
+    """
+    def __init__(self, X: np.ndarray, y: np.ndarray):
+        self.X = X.astype(np.float32)
+        self.y = y.astype(np.int64)
 
     def __len__(self):
         return len(self.y)
