@@ -1,3 +1,4 @@
 *.root
-S2SG4
+G4S2S
 ana
+src/__pycache__/
