@@ -12,14 +12,17 @@ data:
   tree_name: g4s2s
   label_column: label
   feature_columns:
-    - t0_theta
-    - t0_phi
+    - t0_ux
+    - t0_uy
+    - t0_uz
     - t0_dedx
-    - t1_theta
-    - t1_phi
+    - t1_ux
+    - t1_uy
+    - t1_uz
     - t1_dedx
-    - t2_theta
-    - t2_phi
+    - t2_ux
+    - t2_uy
+    - t2_uz
     - t2_dedx
   fraction: 1.0
     

@@ -1,6 +1,8 @@
 import argparse
 import json
+import random
 import optuna
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -46,6 +48,14 @@ def objective_factory(config, base_dir):
     data_cfg = config.get("data", {})
     tuning_cfg = config.get("tuning", {})
     seed = _resolve_seed(tuning_cfg.get("seed"), config.get("seed"))
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
     files = resolve_data_files(data_cfg, base_dir)
     if not files:

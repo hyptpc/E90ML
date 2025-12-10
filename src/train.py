@@ -2,9 +2,11 @@ import argparse
 import copy
 import json
 import pickle
+import random
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 import torch
@@ -95,6 +97,14 @@ def train_final(config, base_dir):
     tuning_cfg = config.get("tuning", {})
 
     seed = _resolve_seed(training_cfg.get("seed"), config.get("seed"))
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
     files = resolve_data_files(data_cfg, base_dir)
     if not files:
