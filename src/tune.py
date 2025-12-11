@@ -273,6 +273,47 @@ def run_tuning(config, base_dir):
         print(f"Saved tuning trials to '{trials_path}'.")
         
     # --- Visualization ---
+    def _finalize_plot(path, *, title=None, rect=(0, 0, 1, 0.95), adjust=None):
+        """
+        Remove default titles from Optuna plots, add a single suptitle, then layout and save.
+        rect reserves headroom for the suptitle and (optionally) space on the right.
+        """
+        fig = plt.gcf()
+        suptitle = getattr(fig, "_suptitle", None)
+        if suptitle is not None:
+            suptitle.remove()
+        if title:
+            fig.suptitle(title, y=0.99)
+        fig.tight_layout(rect=rect)
+        if adjust:
+            adjust(fig)
+        fig.savefig(path)
+        plt.close(fig)
+
+    def _move_colorbar_to_right(fig, pad=0.02, width=0.02):
+        """
+        Push the colorbar to the right of all other axes to avoid overlap.
+        """
+        axes = fig.axes
+        if len(axes) <= 1:
+            return
+
+        # Colorbar is typically the narrowest axis
+        cbar_ax = min(axes, key=lambda ax: ax.get_position().width)
+        other_axes = [ax for ax in axes if ax is not cbar_ax]
+        if not other_axes:
+            return
+
+        right_edge = max(ax.get_position().x1 for ax in other_axes)
+        pos = cbar_ax.get_position()
+        new_left = min(right_edge + pad, 0.98 - width)
+        available = 1.0 - new_left
+        new_width = min(width, pos.width, available)
+        if new_width <= 0 or new_left <= pos.x0:
+            return
+
+        cbar_ax.set_position([new_left, pos.y0, new_width, pos.height])
+
     print("Generating tuning plots...")
     for path in plot_paths.values():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,20 +323,14 @@ def run_tuning(config, base_dir):
     # 1. Optimization History
     plt.figure()
     plot_optimization_history(study)
-    plt.title("Optimization History")
-    plt.tight_layout()
-    plt.savefig(plot_paths["optimization_history"])
-    plt.close()
+    _finalize_plot(plot_paths["optimization_history"], title="Optimization History")
     saved_plots.append(plot_paths["optimization_history"])
 
     # 2. Hyperparameter Importances
     try:
         plt.figure()
         plot_param_importances(study)
-        plt.title("Hyperparameter Importances")
-        plt.tight_layout()
-        plt.savefig(plot_paths["param_importances"])
-        plt.close()
+        _finalize_plot(plot_paths["param_importances"], title="Hyperparameter Importances")
         saved_plots.append(plot_paths["param_importances"])
     except ValueError:
         print("Skipping param_importances plot (requires more than one parameter).")
@@ -303,10 +338,12 @@ def run_tuning(config, base_dir):
     # 3. Slice Plot
     plt.figure()
     plot_slice(study)
-    plt.title("Parameter Slices")
-    plt.tight_layout()
-    plt.savefig(plot_paths["param_slice"])
-    plt.close()
+    _finalize_plot(
+        plot_paths["param_slice"],
+        title="Parameter Slices",
+        rect=(0, 0, 0.9, 0.92),
+        adjust=_move_colorbar_to_right,
+    )
     saved_plots.append(plot_paths["param_slice"])
 
     if saved_plots:
