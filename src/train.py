@@ -31,6 +31,7 @@ from common import (
     resolve_dir,
     _resolve_seed,
     load_data,
+    compute_f1,
 )
 
 
@@ -42,12 +43,12 @@ def _plot_training_curves(history, out_path: Path):
     fig = plt.figure(figsize=(10, 4))
 
     plt.subplot(1, 2, 1)
-    plt.plot(history["train_acc"], c="blue", label="train", linestyle="--")
-    plt.plot(history["val_acc"], c="red", label="val", linestyle="-")
+    plt.plot(history["train_f1"], c="blue", label="train", linestyle="--")
+    plt.plot(history["val_f1"], c="red", label="val", linestyle="-")
     plt.legend()
     plt.xlabel("epoch", fontsize=10)
-    plt.ylabel("accuracy", fontsize=10)
-    plt.title("Training and validation accuracy")
+    plt.ylabel("F1-score", fontsize=10)
+    plt.title("Training and validation F1-score")
     plt.grid()
 
     plt.subplot(1, 2, 2)
@@ -150,6 +151,7 @@ def train_final(config, base_dir):
     # Datasets & Loaders
     train_dataset = E90Dataset(train_features, train_labels)
     val_dataset = E90Dataset(val_features, val_labels)
+    train_label_counts = np.bincount(train_dataset.y, minlength=2) if num_classes == 2 else None
     
     del train_features, val_features, train_labels, val_labels
     gc.collect()
@@ -198,8 +200,8 @@ def train_final(config, base_dir):
 
     # Weighted Loss
     if num_classes == 2:
-        num_pos = (train_labels == 1).sum()
-        num_neg = (train_labels == 0).sum()
+        num_pos = float(train_label_counts[1]) if train_label_counts is not None else 0.0
+        num_neg = float(train_label_counts[0]) if train_label_counts is not None else 0.0
         pos_weight = torch.tensor(num_neg / num_pos, dtype=torch.float32).to(device) if num_pos > 0 else None
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         if pos_weight is not None:
@@ -210,8 +212,8 @@ def train_final(config, base_dir):
         criterion = nn.CrossEntropyLoss()
 
     # Training State
-    history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
-    best_val_acc = 0.0
+    history = {"train_loss": [], "val_loss": [], "train_f1": [], "val_f1": []}
+    best_val_f1 = 0.0
     best_model_wts = copy.deepcopy(model.state_dict())
     no_improve_count = 0
     start_epoch = 0
@@ -225,8 +227,11 @@ def train_final(config, base_dir):
 
             ckpt_history = checkpoint.get("history")
             if ckpt_history:
-                history = {key: ckpt_history.get(key, []) for key in history}
-            best_val_acc = float(checkpoint.get("best_val_acc", best_val_acc))
+                history["train_loss"] = ckpt_history.get("train_loss", history["train_loss"])
+                history["val_loss"] = ckpt_history.get("val_loss", history["val_loss"])
+                history["train_f1"] = ckpt_history.get("train_f1", ckpt_history.get("train_acc", []))
+                history["val_f1"] = ckpt_history.get("val_f1", ckpt_history.get("val_acc", []))
+            best_val_f1 = float(checkpoint.get("best_val_f1", checkpoint.get("best_val_acc", best_val_f1)))
             best_model_wts = checkpoint.get("best_model_state_dict", best_model_wts)
             no_improve_count = int(checkpoint.get("no_improve_count", no_improve_count))
             start_epoch = int(checkpoint.get("epoch", 0))
@@ -239,8 +244,9 @@ def train_final(config, base_dir):
     for epoch in range(start_epoch, epochs):
         model.train()
         running_loss = 0.0
-        correct = 0
-        total = 0
+        train_total = 0
+        train_preds = []
+        train_targets = []
         for inputs, labels in train_loader:
             # inputs/labels are already Tensor on CPU from E90Dataset
             optimizer.zero_grad()
@@ -256,16 +262,18 @@ def train_final(config, base_dir):
             optimizer.step()
 
             running_loss += loss.item() * inputs.size(0)
-            total += labels.size(0)
-            correct += (preds == labels).sum().item()
+            train_total += labels.size(0)
+            train_targets.extend(labels.cpu().numpy().tolist())
+            train_preds.extend(preds.detach().cpu().numpy().tolist())
 
-        train_loss = running_loss / total
-        train_acc = correct / total if total > 0 else 0.0
+        train_loss = running_loss / train_total if train_total > 0 else 0.0
+        train_f1 = compute_f1(train_targets, train_preds, num_classes) if train_targets else 0.0
 
         model.eval()
         val_running_loss = 0.0
-        val_correct = 0
         val_total = 0
+        val_targets = []
+        val_preds = []
         with torch.no_grad():
             for inputs, labels in val_loader:
                 inputs = inputs.to(device)
@@ -280,25 +288,26 @@ def train_final(config, base_dir):
                     preds = torch.argmax(outputs, dim=1)
                 val_running_loss += loss.item() * inputs.size(0)
                 val_total += labels.size(0)
-                val_correct += (preds == labels).sum().item()
+                val_targets.extend(labels.cpu().numpy().tolist())
+                val_preds.extend(preds.cpu().numpy().tolist())
 
-        val_loss = val_running_loss / val_total
-        val_acc = val_correct / val_total if val_total > 0 else 0.0
+        val_loss = val_running_loss / val_total if val_total > 0 else 0.0
+        val_f1 = compute_f1(val_targets, val_preds, num_classes) if val_targets else 0.0
 
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
-        history["train_acc"].append(train_acc)
-        history["val_acc"].append(val_acc)
+        history["train_f1"].append(train_f1)
+        history["val_f1"].append(val_f1)
 
         print(
             f"Epoch {epoch + 1}/{epochs} | "
-            f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
-            f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}"
+            f"Train Loss: {train_loss:.4f} | Train F1: {train_f1:.4f} | "
+            f"Val Loss: {val_loss:.4f} | Val F1: {val_f1:.4f}"
         )
 
         # Early Stopping & Best Model Saving
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
             best_model_wts = copy.deepcopy(model.state_dict())
             no_improve_count = 0
             # Optional: save checkpoint here
@@ -310,7 +319,7 @@ def train_final(config, base_dir):
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "best_model_state_dict": best_model_wts,
-            "best_val_acc": best_val_acc,
+            "best_val_f1": best_val_f1,
             "history": history,
             "no_improve_count": no_improve_count,
         }
@@ -322,7 +331,7 @@ def train_final(config, base_dir):
             break
 
     # Load best model weights
-    print(f"Training finished. Best Val Acc: {best_val_acc:.4f}")
+    print(f"Training finished. Best Val F1: {best_val_f1:.4f}")
     model.load_state_dict(best_model_wts)
 
     model_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -349,9 +358,9 @@ def train_final(config, base_dir):
     metrics_payload = {
         "train_loss": history["train_loss"],
         "val_loss": history["val_loss"],
-        "train_acc": history["train_acc"],
-        "val_acc": history["val_acc"],
-        "best_val_acc": best_val_acc,
+        "train_f1": history["train_f1"],
+        "val_f1": history["val_f1"],
+        "best_val_f1": best_val_f1,
         "epochs_run": len(history["train_loss"]),
         "batch_size": batch_size,
         "learning_rate": lr,

@@ -8,6 +8,7 @@ import torch
 import yaml
 import uproot
 import gc
+from sklearn.metrics import f1_score
 from torch.utils.data import Dataset as TorchDataset
 
 # Standard output directories
@@ -138,6 +139,14 @@ def apply_plot_style(overrides: Optional[dict] = None):
     if overrides:
         params.update({k: v for k, v in overrides.items() if v is not None})
     mpl.rcParams.update(params)
+
+
+def compute_f1(y_true, y_pred, num_classes: int):
+    """
+    Compute F1-score for binary (binary average) or multiclass (macro average) cases.
+    """
+    average = "binary" if num_classes == 2 else "macro"
+    return f1_score(y_true, y_pred, average=average, zero_division=0)
 
 
 def resolve_device(device_pref=None) -> torch.device:

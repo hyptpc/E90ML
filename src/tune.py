@@ -31,6 +31,7 @@ from common import (
     resolve_dir,
     _resolve_seed,
     load_data,
+    compute_f1,
 )
 
 from common import (
@@ -47,6 +48,7 @@ from common import (
     resolve_dir,
     _resolve_seed,
     load_data,
+    compute_f1,
 )
 
 
@@ -204,8 +206,8 @@ def objective_factory(config, base_dir):
 
             # Validation
             model.eval()
-            correct = 0
-            total = 0
+            val_true = []
+            val_pred = []
             with torch.no_grad():
                 for inputs, labels_batch in val_loader:
                     if num_classes == 2:
@@ -214,16 +216,16 @@ def objective_factory(config, base_dir):
                     else:
                         outputs = model(inputs)
                         predicted = torch.argmax(outputs, dim=1)
-                    total += labels_batch.size(0)
-                    correct += (predicted == labels_batch).sum().item()
+                    val_true.extend(labels_batch.cpu().numpy().tolist())
+                    val_pred.extend(predicted.cpu().numpy().tolist())
 
-            accuracy = correct / total if total > 0 else 0.0
-            trial.report(accuracy, epoch)
+            val_f1 = compute_f1(val_true, val_pred, num_classes) if val_true else 0.0
+            trial.report(val_f1, epoch)
 
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
 
-        return accuracy
+        return val_f1
 
     return objective, n_trials
 

@@ -20,6 +20,7 @@ from common import (
     resolve_device,
     resolve_dir,
     load_data,
+    compute_f1,
 )
 
 
@@ -119,6 +120,8 @@ def evaluate(config, base_dir):
     correct = 0
     running_loss = 0.0
     records = []
+    all_true = []
+    all_pred = []
 
     with torch.no_grad():
         for inputs, labels_batch in data_loader:
@@ -156,9 +159,13 @@ def evaluate(config, base_dir):
             total += labels_batch.size(0)
             correct += (preds.to(labels_batch.device) == labels_batch).sum().item()
             running_loss += loss.item() * labels_batch.size(0)
+            all_true.extend(labels_batch.cpu().numpy().tolist())
+            all_pred.extend(preds.cpu().numpy().tolist())
 
     accuracy = correct / total if total > 0 else 0.0
     avg_loss = running_loss / total if total > 0 else 0.0
+    f1 = compute_f1(all_true, all_pred, num_classes) if all_true else 0.0
+    print(f"Test F1: {f1:.4f} | Accuracy: {accuracy:.4f} | Loss: {avg_loss:.4f}")
 
     predictions_output_raw = get_config_value(
         test_cfg, "predictions_output_file", "predictions_output_path"
@@ -173,6 +180,7 @@ def evaluate(config, base_dir):
     metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_payload = {
         "loss": avg_loss,
+        "f1_score": f1,
         "accuracy": accuracy,
         "num_samples": total,
         "num_classes": num_classes,
