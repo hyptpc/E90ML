@@ -1,6 +1,7 @@
 import argparse
 import json
 import random
+import gc
 import optuna
 import numpy as np
 import torch
@@ -32,6 +33,22 @@ from common import (
     load_data,
 )
 
+from common import (
+    E90Dataset,
+    OUTPUT_DIR,
+    LABEL_MAPPING,
+    TUNE_DIR,
+    get_config_value,
+    apply_plot_style,
+    create_model_from_params,
+    load_config,
+    resolve_data_files,
+    resolve_device,
+    resolve_dir,
+    _resolve_seed,
+    load_data,
+)
+
 
 def _int_range(cfg, key):
     item = cfg.get(key)
@@ -44,18 +61,21 @@ def _float_range(cfg, key):
 
 
 def objective_factory(config, base_dir):
-    """Create an Optuna objective that uses stratified splits and leak-safe scaling."""
+    """
+    CPU Optimized: Pre-process data ONCE outside the trial loop to save time and memory.
+    """
     data_cfg = config.get("data", {})
     tuning_cfg = config.get("tuning", {})
     seed = _resolve_seed(tuning_cfg.get("seed"), config.get("seed"))
+    
+    # CPU Optimization: Set threads
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
+    
+    # Use all available cores for matrix operations
+    # torch.set_num_threads(8) # Uncomment and set manually if needed
 
     files = resolve_data_files(data_cfg, base_dir)
     if not files:
@@ -70,6 +90,7 @@ def objective_factory(config, base_dir):
     tune_fraction = float(tuning_cfg["fraction"])
     val_split = float(tuning_cfg["val_split"])
 
+    print("Loading data...")
     dataset_df, num_classes = load_data(
         files=files,
         tree_name=tree_name,
@@ -80,48 +101,77 @@ def objective_factory(config, base_dir):
         random_state=seed,
     )
 
-    feature_matrix = dataset_df[features].values
-    labels = dataset_df[label_column].values
+    # --- Memory Optimization Block ---
+    print("Processing data (Split & Scale)...")
+    # Extract values and immediately cast to float32 to save RAM
+    feature_matrix = dataset_df[features].values.astype(np.float32)
+    labels = dataset_df[label_column].values.astype(np.int64)
+    
+    # Delete DataFrame to free memory
+    del dataset_df
+    gc.collect()
+
+    # 1. Stratified Split (ONCE)
+    train_features, val_features, train_labels, val_labels = train_test_split(
+        feature_matrix,
+        labels,
+        test_size=val_split,
+        stratify=labels,
+        random_state=seed,
+    )
+    
+    # Delete original arrays
+    del feature_matrix, labels
+    gc.collect()
+
+    # 2. Fit Scaler (ONCE)
+    scaler = StandardScaler()
+    train_features = scaler.fit_transform(train_features)
+    val_features = scaler.transform(val_features)
+
+    # 3. Create Tensor Datasets (ONCE)
+    train_dataset = E90Dataset(train_features, train_labels)
+    val_dataset = E90Dataset(val_features, val_labels)
+
+    # Free numpy arrays since data is now in Tensors inside Dataset
+    del train_features, val_features, train_labels, val_labels
+    gc.collect()
+    print("Data processing complete. Starting tuning...")
+    # ---------------------------------
 
     # Tuning parameters
+    # For CPU with limited memory, consider reducing num_workers in config (e.g., set to 0 or 2)
     num_workers = int(tuning_cfg["num_workers"])
     epochs = int(tuning_cfg["epochs"])
     n_trials = int(tuning_cfg["n_trials"])
     batch_size_options = tuning_cfg["batch_size_options"]
     search_space_cfg = tuning_cfg["search_space"]
-    device = resolve_device(tuning_cfg.get("device") or config.get("device"))
+    # Force CPU device
+    device = torch.device("cpu")
 
-    # Search space (read exactly from config)
+    # Search space
     n_layers_min, n_layers_max = _int_range(search_space_cfg, "n_layers")
     hidden_min, hidden_max = _int_range(search_space_cfg, "hidden_units")
     dropout_min, dropout_max = _float_range(search_space_cfg, "dropout")
     lr_min, lr_max = _float_range(search_space_cfg, "lr")
 
+    # Calculate pos_weight from the Tensor data directly
+    pos_weight = None
+    if num_classes == 2:
+        # Accessing underlying tensor in dataset
+        num_pos = (train_dataset.y == 1).sum()
+        num_neg = (train_dataset.y == 0).sum()
+        if num_pos > 0:
+            pos_weight = torch.tensor(float(num_neg)/float(num_pos), dtype=torch.float32)
+
     def objective(trial):
-        # 1. Stratified Split (prevents leakage and handles imbalance in split)
-        train_features, val_features, train_labels, val_labels = train_test_split(
-            feature_matrix,
-            labels,
-            test_size=val_split,
-            stratify=labels,
-            random_state=seed,
-        )
-
-        # 2. Fit Scaler on TRAIN ONLY (prevents leakage)
-        scaler = StandardScaler()
-        train_features = scaler.fit_transform(train_features)
-        val_features = scaler.transform(val_features)
-
-        # 3. Create Datasets
-        train_dataset = E90Dataset(train_features, train_labels)
-        val_dataset = E90Dataset(val_features, val_labels)
-
         batch_size = trial.suggest_categorical("batch_size", batch_size_options)
         
+        # CPU: pin_memory=False is usually fine.
+        # num_workers: If memory is tight, 0 is safest.
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-        # Model params
         params = {
             "n_layers": trial.suggest_int("n_layers", n_layers_min, n_layers_max),
             "hidden_units": trial.suggest_int("hidden_units", hidden_min, hidden_max),
@@ -133,22 +183,15 @@ def objective_factory(config, base_dir):
         lr = trial.suggest_float("lr", lr_min, lr_max, log=True)
         optimizer = optim.Adam(model.parameters(), lr=lr)
 
-        # Class Imbalance Handling (Weighted Loss)
         if num_classes == 2:
-            # Calculate pos_weight based on training data
-            num_pos = (train_labels == 1).sum()
-            num_neg = (train_labels == 0).sum()
-            pos_weight = torch.tensor(num_neg / num_pos, dtype=torch.float32).to(device) if num_pos > 0 else None
             criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         else:
             criterion = nn.CrossEntropyLoss()
 
-        # Training Loop
         for epoch in range(epochs):
             model.train()
             for inputs, labels_batch in train_loader:
-                inputs = inputs.to(device)
-                labels_batch = labels_batch.to(device)
+                # Inputs are already on CPU
                 optimizer.zero_grad()
                 if num_classes == 2:
                     outputs = model(inputs).squeeze(1)
@@ -165,8 +208,6 @@ def objective_factory(config, base_dir):
             total = 0
             with torch.no_grad():
                 for inputs, labels_batch in val_loader:
-                    inputs = inputs.to(device)
-                    labels_batch = labels_batch.to(device)
                     if num_classes == 2:
                         outputs = model(inputs).squeeze(1)
                         predicted = (torch.sigmoid(outputs) > 0.5).long()

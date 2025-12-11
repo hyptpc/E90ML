@@ -28,12 +28,12 @@ data:
     
 tuning:
   seed: 42               # RNG seed for tuning splits/shuffling (leave blank to disable)
-  fraction: 0.3
+  fraction: 0.01
   val_split: 0.2
-  epochs: 20
+  epochs: 10
   n_trials: 100
   batch_size_options: [1024, 2048, 4096]
-  num_workers: 0
+  num_workers: 2
   direction: maximize
   search_space:
     n_layers: {min: 2, max: 6}
@@ -54,7 +54,7 @@ training:
   val_split: 0.2
   epochs: 50
   patience: 10
-  num_workers: 8
+  num_workers: 2
   checkpoint_file: demo.pth                     # saved under param/pth (used for resume; same as model output)
   model_output_file: demo.pth                   # saved under param/pth
   scaler_output_file: demo_scaler.pkl           # saved under param/pth

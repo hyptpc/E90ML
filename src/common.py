@@ -7,6 +7,7 @@ import pandas as pd
 import torch
 import yaml
 import uproot
+import gc
 from torch.utils.data import Dataset as TorchDataset
 
 # Standard output directories
@@ -226,13 +227,13 @@ class E90Dataset(TorchDataset):
     """
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = X.astype(np.float32)
-        self.y = y.astype(np.int64)
+        self.y = y.astype(np.long)
 
     def __len__(self):
         return len(self.y)
 
     def __getitem__(self, idx):
-        return torch.tensor(self.X[idx]), torch.tensor(self.y[idx])
+        return self.X[idx], self.y[idx]
 
 
 def create_model_from_params(params: dict, input_dim: int, num_classes: int) -> torch.nn.Sequential:

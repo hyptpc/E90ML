@@ -3,6 +3,7 @@ import copy
 import json
 import pickle
 import random
+import gc
 from pathlib import Path
 
 import numpy as np
@@ -103,6 +104,7 @@ def train_final(config, base_dir):
     batch_size_override = training_cfg.get("batch_size")
 
     # Load Data (Full)
+    print("Loading data...")
     full_df, num_classes = load_data(
         files=files,
         tree_name=tree_name,
@@ -113,10 +115,13 @@ def train_final(config, base_dir):
         random_state=seed,
     )
 
-    feature_matrix = full_df[features].values
-    labels = full_df[label_column].values
+    # --- Memory Optimization ---
+    print("Processing data...")
+    feature_matrix = full_df[features].values.astype(np.float32)
+    labels = full_df[label_column].values.astype(np.int64)
+    del full_df
+    gc.collect()
 
-    # Stratified Split
     train_features, val_features, train_labels, val_labels = train_test_split(
         feature_matrix,
         labels,
@@ -124,11 +129,13 @@ def train_final(config, base_dir):
         stratify=labels,
         random_state=seed,
     )
+    del feature_matrix, labels
+    gc.collect()
 
-    # Scale (Fit on Train ONLY)
     scaler = StandardScaler()
     train_features = scaler.fit_transform(train_features)
     val_features = scaler.transform(val_features)
+    # ---------------------------
 
     # Save Scaler for future inference
     scaler_output_raw = get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
@@ -143,6 +150,9 @@ def train_final(config, base_dir):
     # Datasets & Loaders
     train_dataset = E90Dataset(train_features, train_labels)
     val_dataset = E90Dataset(val_features, val_labels)
+    
+    del train_features, val_features, train_labels, val_labels
+    gc.collect()
 
     # Load Tuned Hyperparameters
     best_params_raw = get_config_value(training_cfg, "best_params_file", "best_params_path") or get_config_value(
@@ -232,8 +242,7 @@ def train_final(config, base_dir):
         correct = 0
         total = 0
         for inputs, labels in train_loader:
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+            # inputs/labels are already Tensor on CPU from E90Dataset
             optimizer.zero_grad()
             if num_classes == 2:
                 outputs = model(inputs).squeeze(1)
