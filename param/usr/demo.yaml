@@ -31,17 +31,22 @@ tuning:
   fraction: 0.3
   val_split: 0.2
   epochs: 20
-  n_trials: 50
-  batch_size_options: [64, 128, 256]
-  num_workers: 8
+  n_trials: 100
+  batch_size_options: [1024, 2048, 4096]
+  num_workers: 0
   direction: maximize
   search_space:
-    n_layers: {min: 2, max: 4}
+    n_layers: {min: 2, max: 6}
     hidden_units: {min: 64, max: 256}
     dropout: {min: 0.1, max: 0.5}
     lr: {min: 1.0e-4, max: 1.0e-2}
   tune_params_file: tuned_params.json         # saved under param/tune
   study_summary_file: tuning_trials.csv       # saved under data/output
+  plots:
+    dir: plots                                # saved under data/output
+    optimization_history_file: optimization_history.png
+    param_importances_file: param_importances.png
+    param_slice_file: param_slice.png
 
 training:
   seed: 90                                     # RNG seed for training splits/shuffling (leave blank to disable)

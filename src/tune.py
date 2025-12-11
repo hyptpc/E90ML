@@ -9,12 +9,20 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+from optuna.visualization.matplotlib import (
+    plot_optimization_history,
+    plot_param_importances,
+    plot_slice
+)
 
 from common import (
     E90Dataset,
-    DEFAULT_OUTPUT_DIR,
-    DEFAULT_LABEL_MAPPING,
-    DEFAULT_TUNE_DIR,
+    OUTPUT_DIR,
+    LABEL_MAPPING,
+    TUNE_DIR,
+    get_config_value,
+    apply_plot_style,
     create_model_from_params,
     load_config,
     resolve_data_files,
@@ -23,14 +31,6 @@ from common import (
     _resolve_seed,
     load_data,
 )
-
-
-def _get_config_value(cfg: dict, *keys: str):
-    for key in keys:
-        value = cfg.get(key)
-        if value not in (None, ""):
-            return value
-    return None
 
 
 def _int_range(cfg, key):
@@ -64,7 +64,9 @@ def objective_factory(config, base_dir):
     tree_name = data_cfg.get("tree_name")
     features = data_cfg.get("feature_columns")
     label_column = data_cfg.get("label_column")
-    label_mapping = DEFAULT_LABEL_MAPPING
+    label_mapping = data_cfg.get("label_mapping")
+    if label_mapping is None:
+        label_mapping = LABEL_MAPPING
     tune_fraction = float(tuning_cfg["fraction"])
     val_split = float(tuning_cfg["val_split"])
 
@@ -188,13 +190,26 @@ def objective_factory(config, base_dir):
 def run_tuning(config, base_dir):
     tuning_cfg = config.get("tuning", {})
     direction = tuning_cfg["direction"]
-    best_params_raw = _get_config_value(tuning_cfg, "tune_params_file", "best_params_file", "best_params_path")
+    best_params_raw = get_config_value(tuning_cfg, "tune_params_file", "best_params_file", "best_params_path")
     if not best_params_raw:
         raise ValueError("Config must set tuning.tune_params_file (or best_params_file/best_params_path).")
-    best_params_path = resolve_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
+    best_params_path = resolve_dir(best_params_raw, TUNE_DIR, base_dir)
 
-    trials_raw = _get_config_value(tuning_cfg, "study_summary_file", "study_summary_path")
-    trials_path = resolve_dir(trials_raw, DEFAULT_OUTPUT_DIR, base_dir) if trials_raw else None
+    trials_raw = get_config_value(tuning_cfg, "study_summary_file", "study_summary_path")
+    trials_path = resolve_dir(trials_raw, OUTPUT_DIR, base_dir) if trials_raw else None
+    plots_cfg = tuning_cfg.get("plots", {})
+    plots_dir = resolve_dir(plots_cfg.get("dir", "plots"), OUTPUT_DIR, base_dir)
+    plot_paths = {
+        "optimization_history": resolve_dir(
+            plots_cfg.get("optimization_history_file", "optimization_history.png"), plots_dir, base_dir
+        ),
+        "param_importances": resolve_dir(
+            plots_cfg.get("param_importances_file", "param_importances.png"), plots_dir, base_dir
+        ),
+        "param_slice": resolve_dir(
+            plots_cfg.get("param_slice_file", "param_slice.png"), plots_dir, base_dir
+        ),
+    }
 
     objective, n_trials = objective_factory(config, base_dir)
     study = optuna.create_study(direction=direction)
@@ -215,6 +230,47 @@ def run_tuning(config, base_dir):
         df = study.trials_dataframe()
         df.to_csv(trials_path, index=False)
         print(f"Saved tuning trials to '{trials_path}'.")
+        
+    # --- Visualization ---
+    print("Generating tuning plots...")
+    for path in plot_paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    apply_plot_style()
+    saved_plots = []
+
+    # 1. Optimization History
+    plt.figure()
+    plot_optimization_history(study)
+    plt.title("Optimization History")
+    plt.tight_layout()
+    plt.savefig(plot_paths["optimization_history"])
+    plt.close()
+    saved_plots.append(plot_paths["optimization_history"])
+
+    # 2. Hyperparameter Importances
+    try:
+        plt.figure()
+        plot_param_importances(study)
+        plt.title("Hyperparameter Importances")
+        plt.tight_layout()
+        plt.savefig(plot_paths["param_importances"])
+        plt.close()
+        saved_plots.append(plot_paths["param_importances"])
+    except ValueError:
+        print("Skipping param_importances plot (requires more than one parameter).")
+
+    # 3. Slice Plot
+    plt.figure()
+    plot_slice(study)
+    plt.title("Parameter Slices")
+    plt.tight_layout()
+    plt.savefig(plot_paths["param_slice"])
+    plt.close()
+    saved_plots.append(plot_paths["param_slice"])
+
+    if saved_plots:
+        saved_str = ", ".join(str(p) for p in saved_plots)
+        print(f"Saved tuning plots to {saved_str}.")
 
 
 def parse_args():

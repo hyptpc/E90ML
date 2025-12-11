@@ -4,7 +4,6 @@ import json
 import pickle
 import random
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -18,11 +17,12 @@ from sklearn.preprocessing import StandardScaler
 
 from common import (
     E90Dataset,
-    DEFAULT_OUTPUT_DIR,
-    DEFAULT_PTH_DIR,
-    DEFAULT_PLOTS_DIR,
-    DEFAULT_LABEL_MAPPING,
-    DEFAULT_TUNE_DIR,
+    OUTPUT_DIR,
+    PTH_DIR,
+    LABEL_MAPPING,
+    TUNE_DIR,
+    get_config_value,
+    apply_plot_style,
     create_model_from_params,
     load_config,
     resolve_data_files,
@@ -33,34 +33,10 @@ from common import (
 )
 
 
-def _get_config_value(cfg: dict, *keys: str) -> Optional[str]:
-    for key in keys:
-        value = cfg.get(key)
-        if value not in (None, ""):
-            return value
-    return None
-
-
 def _plot_training_curves(history, out_path: Path):
     import matplotlib.pyplot as plt
 
-    plt.rcParams["font.family"] = "TimesNewRoman"
-    plt.rcParams["mathtext.fontset"] = "stix"
-    plt.rcParams["font.size"] = 12
-    plt.rcParams["axes.linewidth"] = 1.0
-    plt.rcParams["axes.grid"] = False
-    plt.rcParams["xtick.direction"] = "in"
-    plt.rcParams["ytick.direction"] = "in"
-    plt.rcParams["xtick.minor.visible"] = True
-    plt.rcParams["ytick.minor.visible"] = True
-    plt.rcParams["xtick.major.size"] = 10
-    plt.rcParams["ytick.major.size"] = 10
-    plt.rcParams["xtick.minor.size"] = 5
-    plt.rcParams["ytick.minor.size"] = 5
-    plt.rcParams["figure.subplot.left"] = 0.12
-    plt.rcParams["figure.subplot.right"] = 0.8
-    plt.rcParams["figure.subplot.top"] = 0.88
-    plt.rcParams["figure.subplot.bottom"] = 0.12
+    apply_plot_style()
 
     fig = plt.figure(figsize=(10, 4))
 
@@ -115,7 +91,7 @@ def train_final(config, base_dir):
     label_column = data_cfg.get("label_column")
     label_mapping = data_cfg.get("label_mapping")
     if label_mapping is None:
-        label_mapping = DEFAULT_LABEL_MAPPING
+        label_mapping = LABEL_MAPPING
     if tree_name is None or features is None or label_column is None:
         raise ValueError("Config must define tree_name, feature_columns, and label_column under data.")
 
@@ -155,10 +131,10 @@ def train_final(config, base_dir):
     val_features = scaler.transform(val_features)
 
     # Save Scaler for future inference
-    scaler_output_raw = _get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
+    scaler_output_raw = get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
     if not scaler_output_raw:
         raise ValueError("Config must set training.scaler_output_file.")
-    scaler_output_path = resolve_dir(scaler_output_raw, DEFAULT_PTH_DIR, base_dir)
+    scaler_output_path = resolve_dir(scaler_output_raw, PTH_DIR, base_dir)
     scaler_output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(scaler_output_path, "wb") as f:
         pickle.dump(scaler, f)
@@ -169,25 +145,25 @@ def train_final(config, base_dir):
     val_dataset = E90Dataset(val_features, val_labels)
 
     # Load Tuned Hyperparameters
-    best_params_raw = _get_config_value(training_cfg, "best_params_file", "best_params_path") or _get_config_value(
+    best_params_raw = get_config_value(training_cfg, "best_params_file", "best_params_path") or get_config_value(
         tuning_cfg, "tune_params_file", "best_params_file", "best_params_path"
     )
     if not best_params_raw:
         raise ValueError("Config must set training.best_params_file or tuning.tune_params_file.")
 
-    best_params_path = resolve_dir(best_params_raw, DEFAULT_TUNE_DIR, base_dir)
+    best_params_path = resolve_dir(best_params_raw, TUNE_DIR, base_dir)
     if not best_params_path.exists():
         raise FileNotFoundError(
             f"Best parameter file not found at {best_params_path}. Run tuning first or update the config."
         )
 
-    model_output_raw = _get_config_value(training_cfg, "model_output_file", "model_output_path")
+    model_output_raw = get_config_value(training_cfg, "model_output_file", "model_output_path")
     if not model_output_raw:
         raise ValueError("Config must set training.model_output_file.")
-    model_output_path = resolve_dir(model_output_raw, DEFAULT_PTH_DIR, base_dir)
+    model_output_path = resolve_dir(model_output_raw, PTH_DIR, base_dir)
 
-    checkpoint_raw = _get_config_value(training_cfg, "checkpoint_file", "checkpoint_path")
-    checkpoint_path = resolve_dir(checkpoint_raw or model_output_raw, DEFAULT_PTH_DIR, base_dir)
+    checkpoint_raw = get_config_value(training_cfg, "checkpoint_file", "checkpoint_path")
+    checkpoint_path = resolve_dir(checkpoint_raw or model_output_raw, PTH_DIR, base_dir)
 
     with best_params_path.open() as f:
         params = json.load(f)
@@ -345,10 +321,10 @@ def train_final(config, base_dir):
     print(f"Best model saved to '{model_output_path}'.")
 
     # Plotting
-    plot_output_raw = _get_config_value(
+    plot_output_raw = get_config_value(
         training_cfg, "plot_output_file", "plot_output_path", "plots_path", "plots_dir"
     )
-    plot_output_path = resolve_dir(plot_output_raw or "training_curves.png", DEFAULT_OUTPUT_DIR, base_dir)
+    plot_output_path = resolve_dir(plot_output_raw or "training_curves.png", OUTPUT_DIR, base_dir)
     if plot_output_path.suffix == "":
         plot_output_path = plot_output_path / "training_curves.png"
 
@@ -356,10 +332,10 @@ def train_final(config, base_dir):
     print(f"Saved training curves to '{plot_output_path}'.")
 
     # Metrics
-    metrics_output_raw = _get_config_value(training_cfg, "metrics_output_file", "metrics_output_path")
+    metrics_output_raw = get_config_value(training_cfg, "metrics_output_file", "metrics_output_path")
     if not metrics_output_raw:
         raise ValueError("Config must set training.metrics_output_file.")
-    metrics_output_path = resolve_dir(metrics_output_raw, DEFAULT_OUTPUT_DIR, base_dir)
+    metrics_output_path = resolve_dir(metrics_output_raw, OUTPUT_DIR, base_dir)
     metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_payload = {
         "train_loss": history["train_loss"],
@@ -379,12 +355,12 @@ def train_final(config, base_dir):
 
     # Predictions (on FULL dataset or Test set)
     # Here we predict on the Validation dataset
-    predictions_output_raw = _get_config_value(
+    predictions_output_raw = get_config_value(
         training_cfg, "predictions_output_file", "predictions_output_path"
     )
     if not predictions_output_raw:
         raise ValueError("Config must set training.predictions_output_file.")
-    predictions_output_path = resolve_dir(predictions_output_raw, DEFAULT_OUTPUT_DIR, base_dir)
+    predictions_output_path = resolve_dir(predictions_output_raw, OUTPUT_DIR, base_dir)
     predictions_output_path.parent.mkdir(parents=True, exist_ok=True)
 
     val_loader_seq = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)

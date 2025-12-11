@@ -15,6 +15,30 @@ DEFAULT_PTH_DIR = Path("../pth")
 DEFAULT_INPUT_DIR = Path("../../data/input")
 DEFAULT_OUTPUT_DIR = Path("../../data/output")
 DEFAULT_PLOTS_DIR = DEFAULT_OUTPUT_DIR / "plots"
+TUNE_DIR = DEFAULT_TUNE_DIR
+PTH_DIR = DEFAULT_PTH_DIR
+OUTPUT_DIR = DEFAULT_OUTPUT_DIR
+PLOTS_DIR = DEFAULT_PLOTS_DIR
+
+DEFAULT_PLOT_STYLE = {
+    "font.family": "serif",
+    "mathtext.fontset": "stix",
+    "font.size": 12,
+    "axes.linewidth": 1.0,
+    "axes.grid": False,
+    "xtick.direction": "in",
+    "ytick.direction": "in",
+    "xtick.minor.visible": True,
+    "ytick.minor.visible": True,
+    "xtick.major.size": 10,
+    "ytick.major.size": 10,
+    "xtick.minor.size": 5,
+    "ytick.minor.size": 5,
+    "figure.subplot.left": 0.12,
+    "figure.subplot.right": 0.8,
+    "figure.subplot.top": 0.88,
+    "figure.subplot.bottom": 0.12,
+}
 
 # Default label mapping (SigmaNCusp=1, QFLambda=2, QFSigmaZ=3)
 DEFAULT_REACTION_LABELS = {"SigmaNCusp": 1, "QFLambda": 2, "QFSigmaZ": 3}
@@ -25,6 +49,7 @@ DEFAULT_LABEL_MAPPING = {
         DEFAULT_REACTION_LABELS["QFSigmaZ"],
     ],
 }
+LABEL_MAPPING = DEFAULT_LABEL_MAPPING
 
 
 def _ensure_list(value) -> list:
@@ -93,6 +118,25 @@ def load_config(config_path: str):
         else:
             config = json.load(f)
     return config or {}, path.parent.resolve()
+
+
+def get_config_value(cfg: dict, *keys: str) -> Optional[str]:
+    """Return the first non-empty config value from the provided keys."""
+    for key in keys:
+        value = cfg.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def apply_plot_style(overrides: Optional[dict] = None):
+    """Apply shared matplotlib rcParams with optional overrides."""
+    import matplotlib as mpl
+
+    params = dict(DEFAULT_PLOT_STYLE)
+    if overrides:
+        params.update({k: v for k, v in overrides.items() if v is not None})
+    mpl.rcParams.update(params)
 
 
 def resolve_device(device_pref=None) -> torch.device:

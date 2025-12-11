@@ -1,8 +1,6 @@
 import argparse
 import json
 import pickle
-from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import torch
@@ -14,6 +12,7 @@ from common import (
     DEFAULT_PTH_DIR,
     DEFAULT_TUNE_DIR,
     DEFAULT_LABEL_MAPPING,
+    get_config_value,
     _resolve_seed,
     create_model_from_params,
     load_config,
@@ -24,21 +23,13 @@ from common import (
 )
 
 
-def _get_config_value(cfg: dict, *keys: str) -> Optional[str]:
-    for key in keys:
-        value = cfg.get(key)
-        if value not in (None, ""):
-            return value
-    return None
-
-
 def evaluate(config, base_dir):
     data_cfg = config.get("data", {})
     training_cfg = config.get("training", {})
-    testing_cfg = config.get("testing", {})
+    test_cfg = config.get("test", {})
     tuning_cfg = config.get("tuning", {})
 
-    seed = _resolve_seed(testing_cfg.get("seed"), config.get("seed"))
+    seed = _resolve_seed(test_cfg.get("seed"), config.get("seed"))
 
     files = resolve_data_files(data_cfg, base_dir)
     if not files:
@@ -53,7 +44,7 @@ def evaluate(config, base_dir):
     if tree_name is None or features is None or label_column is None:
         raise ValueError("Config must define tree_name, feature_columns, and label_column under data.")
 
-    fraction = float(testing_cfg.get("fraction", 1.0))
+    fraction = float(test_cfg.get("fraction", 1.0))
 
     data_df, num_classes = load_data(
         files=files,
@@ -65,7 +56,7 @@ def evaluate(config, base_dir):
         random_state=seed,
     )
 
-    scaler_raw = _get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
+    scaler_raw = get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
     if not scaler_raw:
         raise ValueError("Config must set training.scaler_output_file.")
     scaler_path = resolve_dir(scaler_raw, DEFAULT_PTH_DIR, base_dir)
@@ -80,7 +71,7 @@ def evaluate(config, base_dir):
     dataset = E90Dataset(feature_matrix, labels)
 
     # Model + hyperparameters
-    best_params_raw = _get_config_value(training_cfg, "best_params_file", "best_params_path") or _get_config_value(
+    best_params_raw = get_config_value(training_cfg, "best_params_file", "best_params_path") or get_config_value(
         tuning_cfg, "tune_params_file", "best_params_file", "best_params_path"
     )
     if not best_params_raw:
@@ -97,21 +88,21 @@ def evaluate(config, base_dir):
         "dropout_rate": float(params.get("dropout_rate", 0.2)),
     }
     batch_size = int(
-        testing_cfg.get(
+        test_cfg.get(
             "batch_size",
             training_cfg.get("batch_size", params.get("batch_size", 128)),
         )
     )
-    num_workers = int(testing_cfg.get("num_workers", training_cfg.get("num_workers", 0)))
+    num_workers = int(test_cfg.get("num_workers", training_cfg.get("num_workers", 0)))
 
-    model_output_raw = _get_config_value(training_cfg, "model_output_file", "model_output_path")
+    model_output_raw = get_config_value(training_cfg, "model_output_file", "model_output_path")
     if not model_output_raw:
         raise ValueError("Config must set training.model_output_file.")
     model_output_path = resolve_dir(model_output_raw, DEFAULT_PTH_DIR, base_dir)
     if not model_output_path.exists():
         raise FileNotFoundError(f"Trained model not found at {model_output_path}. Train the model first.")
 
-    device = resolve_device(testing_cfg.get("device") or training_cfg.get("device") or config.get("device"))
+    device = resolve_device(test_cfg.get("device") or training_cfg.get("device") or config.get("device"))
     print(f"Using device: {device}")
     model = create_model_from_params(model_params, input_dim=len(features), num_classes=num_classes).to(device)
 
@@ -169,15 +160,15 @@ def evaluate(config, base_dir):
     accuracy = correct / total if total > 0 else 0.0
     avg_loss = running_loss / total if total > 0 else 0.0
 
-    predictions_output_raw = _get_config_value(
-        testing_cfg, "predictions_output_file", "predictions_output_path"
+    predictions_output_raw = get_config_value(
+        test_cfg, "predictions_output_file", "predictions_output_path"
     ) or "test_predictions.csv"
     predictions_output_path = resolve_dir(predictions_output_raw, DEFAULT_OUTPUT_DIR, base_dir)
     predictions_output_path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame.from_records(records).to_csv(predictions_output_path, index=False)
     print(f"Saved test predictions to '{predictions_output_path}'.")
 
-    metrics_output_raw = _get_config_value(testing_cfg, "metrics_output_file", "metrics_output_path") or "test_metrics.json"
+    metrics_output_raw = get_config_value(test_cfg, "metrics_output_file", "metrics_output_path") or "test_metrics.json"
     metrics_output_path = resolve_dir(metrics_output_raw, DEFAULT_OUTPUT_DIR, base_dir)
     metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_payload = {
