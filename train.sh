@@ -1,97 +1,97 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <user param>" >&2
+# --- 1. Argument Validation ---
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <config_path>"
     exit 1
 fi
 
-if [[ -z "${CONDA_PREFIX:-}" && -z "${CONDA_DEFAULT_ENV:-}" ]]; then
-    echo "activate your conda environment!" >&2
+CONFIG_PATH=$1
+
+# --- 2. Extract Configuration from YAML ---
+# Uses Python to parse the 'bsub' section of the YAML file.
+# It converts the config path to an absolute path to ensure accessibility on compute nodes.
+eval $(python -c "
+import sys, yaml, os
+
+try:
+    config_path = '$CONFIG_PATH'
+    abs_config_path = os.path.abspath(config_path)
+
+    with open(abs_config_path) as f:
+        cfg = yaml.safe_load(f)
+    
+    # 1. Global bsub settings
+    bsub_cfg = cfg.get('bsub', {})
+    
+    # 2. Training specific bsub settings (Override)
+    # trainingセクションの中にbsubがあれば、それを優先して上書きマージする
+    training_section = cfg.get('training', {})
+    if 'bsub' in training_section:
+        bsub_cfg.update(training_section['bsub'])
+    
+    # Extract values
+    queue = bsub_cfg.get('queue', 's')
+    email = bsub_cfg.get('email', '')
+    log_file = bsub_cfg.get('log_file', 'lsflog/train_result.log')
+    job_name = bsub_cfg.get('job_name', 'e90_train')
+    conda_env = bsub_cfg.get('conda_env', 'base')
+
+    print(f'QUEUE={queue}')
+    print(f'EMAIL={email}')
+    print(f'LOG_FILE={log_file}')
+    print(f'JOB_NAME={job_name}')
+    print(f'CONDA_ENV={conda_env}')
+    print(f'ABS_CONFIG_PATH={abs_config_path}')
+
+except Exception as e:
+    print(f'Error parsing YAML: {e}', file=sys.stderr)
+    sys.exit(1)
+")
+
+# --- 3. Job Submission (bsub) ---
+# Submits the job to the LSF scheduler using a Here Document.
+# This avoids issues with shell metacharacters (like #, source) being parsed by bsub wrappers.
+
+echo "--------------------------------------------------"
+echo "Submitting Training Job"
+echo "  Job Name  : $JOB_NAME"
+echo "  Queue     : $QUEUE"
+echo "  Config    : $ABS_CONFIG_PATH"
+echo "--------------------------------------------------"
+
+# Ensure the log directory exists
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# The following block is sent directly to bsub as the job script.
+bsub -q "$QUEUE" \
+     -u "$EMAIL" \
+     -o "$LOG_FILE" \
+     -J "$JOB_NAME" \
+     -N <<EOF
+#!/bin/bash
+# ----------------------------------------
+# Job Execution Script
+# ----------------------------------------
+
+# 1. Initialize Environment
+source ~/.bashrc
+
+# 2. Setup Conda
+if ! command -v conda &> /dev/null; then
+    echo "Error: conda command not found. Check your .bashrc."
     exit 1
 fi
+conda activate $CONDA_ENV
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_PATH="$1"
+# 3. Log Job Info
+echo "Job started on host: \$(hostname)"
+echo "Time: \$(date)"
+echo "Config file: $ABS_CONFIG_PATH"
 
-if [[ ! -f "$CONFIG_PATH" ]]; then
-    echo "user param not found: $CONFIG_PATH" >&2
-    exit 1
-fi
+# 4. Run Training Script
+# Note: Using absolute path for config to be safe
+python src/train.py -c "$ABS_CONFIG_PATH"
 
-CONFIG_PATH="$(python - <<'PY' "$CONFIG_PATH"
-import os
-import sys
-
-print(os.path.abspath(sys.argv[1]))
-PY
-)"
-
-python - <<'PY' "$SCRIPT_DIR" "$CONFIG_PATH"
-import sys
-from pathlib import Path
-from textwrap import indent
-
-import yaml
-
-script_dir, config_path = sys.argv[1], sys.argv[2]
-with open(config_path) as f:
-    cfg = yaml.safe_load(f) or {}
-
-data_cfg = cfg.get("data", {})
-train_cfg = cfg.get("training", {})
-tune_cfg = cfg.get("tuning", {})
-
-def get(cfg, *keys):
-    for k in keys:
-        v = cfg.get(k)
-        if v not in (None, ""):
-            return v
-    return None
-
-files = data_cfg.get("files", {})
-tree = data_cfg.get("tree_name")
-label_col = data_cfg.get("label_column")
-features = data_cfg.get("feature_columns") or []
-best_params_file = get(train_cfg, "best_params_file", "best_params_path") or get(
-    tune_cfg, "tune_params_file", "best_params_file", "best_params_path"
-)
-device_pref = train_cfg.get("device") or cfg.get("device")
-plot_output = get(train_cfg, "plot_output_file", "plot_output_path", "plots_path", "plots_dir")
-checkpoint_output = get(train_cfg, "checkpoint_file", "checkpoint_path")
-model_output = get(train_cfg, "model_output_file", "model_output_path")
-scaler_output = get(train_cfg, "scaler_output_file", "scaler_output_path")
-metrics_output = get(train_cfg, "metrics_output_file", "metrics_output_path")
-predictions_output = get(train_cfg, "predictions_output_file", "predictions_output_path")
-
-if not checkpoint_output and model_output:
-    checkpoint_output = model_output
-
-summary = [
-    f"Config: {config_path}",
-    f"Data files: {files if files else 'N/A'}",
-    f"Tree: {tree}",
-    f"Label column: {label_col}",
-    f"Feature count: {len(features)}",
-    f"Training fraction: {train_cfg.get('fraction', 'N/A')}",
-    f"Val split: {train_cfg.get('val_split', 'N/A')}",
-    f"Epochs: {train_cfg.get('epochs', 'N/A')}",
-    f"Patience: {train_cfg.get('patience', 'N/A')}",
-    f"Best params file: {best_params_file or 'N/A'}",
-    f"Checkpoint output: {checkpoint_output or model_output or 'N/A'}",
-    f"Model output: {model_output or 'N/A'}",
-    f"Scaler output: {scaler_output or 'N/A'}",
-    f"Metrics output: {metrics_output or 'N/A'}",
-    f"Predictions output: {predictions_output or 'N/A'}",
-    f"Plot output: {plot_output or 'N/A'}",
-]
-
-if device_pref is not None:
-    summary.append(f"Device preference: {device_pref}")
-
-print("Running final training with config summary:")
-print(indent("\n".join(summary), "  "))
-PY
-
-echo "Running final training with config: $CONFIG_PATH"
-python "$SCRIPT_DIR/src/train.py" --config "$CONFIG_PATH"
+EOF

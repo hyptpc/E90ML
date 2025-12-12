@@ -43,20 +43,20 @@ def _plot_training_curves(history, out_path: Path):
     fig = plt.figure(figsize=(10, 4))
 
     plt.subplot(1, 2, 1)
-    plt.plot(history["train_f1"], c="blue", label="train", linestyle="--")
+    plt.plot(history["train_f1"], c="blue", label="train", linestyle="-")
     plt.plot(history["val_f1"], c="red", label="val", linestyle="-")
     plt.legend()
-    plt.xlabel("epoch", fontsize=10)
-    plt.ylabel("F1-score", fontsize=10)
+    plt.xlabel("epoch")
+    plt.ylabel("F1-score")
     plt.title("Training and validation F1-score")
     plt.grid()
 
     plt.subplot(1, 2, 2)
-    plt.plot(history["train_loss"], c="blue", label="train", linestyle="--")
+    plt.plot(history["train_loss"], c="blue", label="train", linestyle="-")
     plt.plot(history["val_loss"], c="red", label="val", linestyle="-")
     plt.legend()
-    plt.xlabel("epoch", fontsize=10)
-    plt.ylabel("loss", fontsize=10)
+    plt.xlabel("epoch")
+    plt.ylabel("loss")
     plt.title("Training and validation loss")
     plt.grid()
 
@@ -192,8 +192,7 @@ def train_final(config, base_dir):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    device = resolve_device(training_cfg.get("device") or config.get("device"))
-    print(f"Using device: {device}")
+    device = resolve_device(config.get("device"))
     model = create_model_from_params(model_params, input_dim=len(features), num_classes=num_classes).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=lr)

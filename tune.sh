@@ -1,75 +1,96 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 <user param>" >&2
+# --- 1. Argument Check ---
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <config_path>"
     exit 1
 fi
 
-if [[ -z "${CONDA_PREFIX:-}" && -z "${CONDA_DEFAULT_ENV:-}" ]]; then
-    echo "activate your conda environment!" >&2
+CONFIG_PATH=$1
+
+# --- 2. Load Configuration from YAML ---
+# Uses Python to parse the YAML file and set shell variables.
+# It converts the config path to an absolute path to ensure it works on compute nodes.
+eval $(python -c "
+import sys, yaml, os
+
+try:
+    config_path = '$CONFIG_PATH'
+    abs_config_path = os.path.abspath(config_path)
+    
+    with open(abs_config_path) as f:
+        cfg = yaml.safe_load(f)
+    
+    # 1. Global bsub settings
+    bsub_cfg = cfg.get('bsub', {})
+    
+    # 2. Tuning specific bsub settings (Override)
+    # tuningセクションの中にbsubがあれば、それを優先して上書きマージする
+    tuning_section = cfg.get('tuning', {})
+    if 'bsub' in tuning_section:
+        bsub_cfg.update(tuning_section['bsub'])
+
+    # Extract values
+    queue = bsub_cfg.get('queue', 's')
+    email = bsub_cfg.get('email', '')
+    # Default fallback if not in yaml
+    log_file = bsub_cfg.get('log_file', 'lsflog/tune_result.log')
+    job_name = bsub_cfg.get('job_name', 'e90_tune')
+    conda_env = bsub_cfg.get('conda_env', 'base')
+
+    print(f'QUEUE={queue}')
+    print(f'EMAIL={email}')
+    print(f'LOG_FILE={log_file}')
+    print(f'JOB_NAME={job_name}')
+    print(f'CONDA_ENV={conda_env}')
+    print(f'ABS_CONFIG_PATH={abs_config_path}')
+
+except Exception as e:
+    print(f'Error parsing YAML: {e}', file=sys.stderr)
+    sys.exit(1)
+")
+
+# --- 3. Submit Job via Here Document ---
+
+echo "--------------------------------------------------"
+echo "Submitting Tuning Job"
+echo "  Job Name  : $JOB_NAME"
+echo "  Queue     : $QUEUE"
+echo "  Config    : $ABS_CONFIG_PATH"
+echo "--------------------------------------------------"
+
+# Ensure log directory exists
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# The following block is sent directly to bsub as the job script.
+bsub -q "$QUEUE" \
+     -u "$EMAIL" \
+     -o "$LOG_FILE" \
+     -J "$JOB_NAME" \
+     -N <<EOF
+#!/bin/bash
+# ----------------------------------------
+# Job Execution Script
+# ----------------------------------------
+
+# 1. Initialize Environment
+source ~/.bashrc
+
+# 2. Setup Conda
+if ! command -v conda &> /dev/null; then
+    echo "Error: conda command not found. Check your .bashrc."
     exit 1
 fi
+conda activate $CONDA_ENV
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_PATH="$1"
+# 3. Log Job Info
+echo "Job started on host: \$(hostname)"
+echo "Time: \$(date)"
+echo "Config file: $ABS_CONFIG_PATH"
 
-if [[ ! -f "$CONFIG_PATH" ]]; then
-    echo "user param not found: $CONFIG_PATH" >&2
-    exit 1
-fi
+# 4. Run Tuning Script
+# Note: Using absolute path for config to be safe
+python src/tune.py -c "$ABS_CONFIG_PATH"
 
-CONFIG_PATH="$(python - <<'PY' "$CONFIG_PATH"
-import os
-import sys
-
-print(os.path.abspath(sys.argv[1]))
-PY
-)"
-
-python - <<'PY' "$SCRIPT_DIR" "$CONFIG_PATH"
-import os
-import sys
-from textwrap import indent
-
-import yaml
-
-script_dir, config_path = sys.argv[1], sys.argv[2]
-with open(config_path) as f:
-    cfg = yaml.safe_load(f) or {}
-
-data_cfg = cfg.get("data", {})
-tune_cfg = cfg.get("tuning", {})
-
-def get(cfg, *keys):
-    for k in keys:
-        v = cfg.get(k)
-        if v not in (None, ""):
-            return v
-    return None
-
-files = data_cfg.get("files", {})
-tree = data_cfg.get("tree_name")
-features = data_cfg.get("feature_columns") or []
-best_params_file = get(tune_cfg, "tune_params_file", "best_params_file", "best_params_path")
-trials_file = get(tune_cfg, "study_summary_file", "study_summary_path")
-
-summary = [
-    f"Config: {config_path}",
-    f"Data files: {files if files else 'N/A'}",
-    f"Tree: {tree}",
-    f"Feature count: {len(features)}",
-    f"Tuning fraction: {tune_cfg.get('fraction', 'N/A')}",
-    f"Val split: {tune_cfg.get('val_split', 'N/A')}",
-    f"Epochs: {tune_cfg.get('epochs', 'N/A')}",
-    f"Trials: {tune_cfg.get('n_trials', 'N/A')}",
-    f"Best params file: {best_params_file or 'N/A'}",
-    f"Trials CSV: {trials_file or 'N/A'}",
-]
-
-print("Running hyperparameter tuning with config summary:")
-print(indent("\n".join(summary), "  "))
-PY
-
-echo "Running hyperparameter tuning with config: $CONFIG_PATH"
-python "$SCRIPT_DIR/src/tune.py" --config "$CONFIG_PATH"
+EOF

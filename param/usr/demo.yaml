@@ -1,12 +1,36 @@
-# E90ML config
+
+# E90ML user config File
 
 metadata:
   purpose: "Binary classification (SigmaNCusp vs background)"
   notes: "Labels: SigmaNCusp=1 (signal), QFLambda=2, QFSigmaZ=3."
 
+# -----------------------------------------------------------------------------
+# [BSUB] - LSF Job Submission Options
+# -----------------------------------------------------------------------------
+# conda_env : Conda environment name used for train/tune/test jobs
+# queue     : LSF queue passed to bsub (e.g., s, l, h)
+# job_name  : Job name identifier (-J option)
+# email     : Email address to receive notifications (-u option)
+# log_file  : Log file path (-o option)
+# -----------------------------------------------------------------------------
+bsub:
+  conda_env: pyml
+  queue: l
+  email: amemiya.kohki.q2@dc.tohoku.ac.jp
+
+# -----------------------------------------------------------------------------
+# [DATA] - Input Data Settings
+# -----------------------------------------------------------------------------
+# files           : Input ROOT files (looked up under data/input)
+# tree_name       : Name of the TTree in ROOT files
+# label_column    : Column name containing truth labels
+# feature_columns : List of features to use for training
+# fraction        : Fraction of data to load (1.0 = use all data)
+# -----------------------------------------------------------------------------
 data:
   files:
-    SigmaNCusp: SigmaNCusp.root   # looked up under data/input
+    SigmaNCusp: SigmaNCusp.root
     QFLambda: QFLambda.root
     QFSigmaZ: QFSigmaZ.root
   tree_name: g4s2s
@@ -25,49 +49,97 @@ data:
     - t2_uz
     - t2_dedx
   fraction: 1.0
-    
+
+# -----------------------------------------------------------------------------
+# [TUNING] - Hyperparameter Optimization (src/tune.py)
+# -----------------------------------------------------------------------------
+# seed               : RNG seed for reproducibility (leave blank for random)
+# fraction           : Data fraction for tuning (keep small for speed, e.g., 0.01)
+# val_split          : Validation set split ratio
+# epochs             : Number of epochs per trial
+# n_trials           : Total number of trials
+# num_workers        : DataLoader workers (0 or small value for CPU stability)
+# direction          : Optimization direction (maximize/minimize)
+# search_space       : Hyperparameter ranges to explore
+#   - batch_size     : List of batch sizes
+#   - n_layers       : Min/Max number of layers
+#   - hidden_units   : Min/Max hidden units
+#   - dropout        : Min/Max dropout rate
+#   - lr             : Min/Max learning rate (log scale)
+# -----------------------------------------------------------------------------
 tuning:
-  seed: 42               # RNG seed for tuning splits/shuffling (leave blank to disable)
+  bsub:
+    job_name: e90_tune
+    log_file: lsflog/tune.log
+  seed: 42
   fraction: 0.01
   val_split: 0.2
   epochs: 10
   n_trials: 100
-  batch_size_options: [1024, 2048, 4096]
   num_workers: 2
   direction: maximize
   search_space:
+    batch_size: [256, 512, 1024]
     n_layers: {min: 2, max: 6}
-    hidden_units: {min: 64, max: 256}
+    hidden_units: {min: 256, max: 1024}
     dropout: {min: 0.1, max: 0.5}
     lr: {min: 1.0e-4, max: 1.0e-2}
-  tune_params_file: tuned_params.json         # saved under param/tune
-  study_summary_file: tuning_trials.csv       # saved under data/output
+  study_db_file: demo.db
+  study_name: e90_demo
+  tune_params_file: tuned_params.json
+  study_summary_file: tuning_trials.csv
   plots:
-    dir: plots                                # saved under data/output
+    dir: plots
     optimization_history_file: optimization_history.png
     param_importances_file: param_importances.png
     param_slice_file: param_slice.png
 
+# -----------------------------------------------------------------------------
+# [TRAINING] - Final Model Training (src/train.py)
+# -----------------------------------------------------------------------------
+# seed                    : RNG seed for training
+# fraction                : Data fraction (usually 1.0 for final training)
+# val_split               : Validation set split ratio
+# epochs                  : Max epochs
+# patience                : Early stopping patience
+# num_workers             : DataLoader workers
+# checkpoint_file         : Path to save/resume checkpoint
+# model_output_file       : Path to save the final model
+# scaler_output_file      : Path to save the scaler
+# best_params_file        : Path to load tuned parameters from
+# metrics_output_file     : Path to save training metrics (json)
+# predictions_output_file : Path to save validation predictions (csv)
+# plot_output_file        : Path to save training history plot (png)
+# -----------------------------------------------------------------------------
 training:
-  seed: 90                                     # RNG seed for training splits/shuffling (leave blank to disable)
+  bsub:
+    job_name: e90_train
+    log_file: lsflog/train.log
+  seed: 90
   fraction: 1.0
   val_split: 0.2
   epochs: 50
   patience: 10
   num_workers: 2
-  checkpoint_file: demo.pth                     # saved under param/pth (used for resume; same as model output)
-  model_output_file: demo.pth                   # saved under param/pth
-  scaler_output_file: demo_scaler.pkl           # saved under param/pth
-  best_params_file: tuned_params.json           # read from param/tune
-  metrics_output_file: demo_metrics.json        # saved under data/output
-  predictions_output_file: demo_predictions.csv # saved under data/output
-  plot_output_file: demo.png                    # saved under data/output
+  checkpoint_file: train.pth
+  model_output_file: train.pth
+  scaler_output_file: demo_scaler.pkl
+  best_params_file: tuned_params.json
+  metrics_output_file: train_metrics.json
+  predictions_output_file: predictions.csv
+  plot_output_file: train_history.png
 
+# -----------------------------------------------------------------------------
+# [TEST] - Inference Settings (src/test.py)
+# -----------------------------------------------------------------------------
 test:
   fraction: 1.0
   batch_size: 128
   num_workers: 8
-  metrics_output_file: demo_test_metrics.json        # saved under data/output
-  predictions_output_file: demo_test_predictions.csv # saved under data/output
+  metrics_output_file: demo_test_metrics.json
+  predictions_output_file: demo_test_predictions.csv
 
-device: auto
+# -----------------------------------------------------------------------------
+# [SYSTEM]
+# -----------------------------------------------------------------------------
+device: auto  # 'cuda', 'cpu', or 'auto'
