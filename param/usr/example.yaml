@@ -10,14 +10,12 @@ metadata:
 # -----------------------------------------------------------------------------
 # conda_env : Conda environment name used for train/tune/test jobs
 # queue     : LSF queue passed to bsub (e.g., s, l, h)
-# job_name  : Job name identifier (-J option)
 # email     : Email address to receive notifications (-u option)
-# log_file  : Log file path (-o option)
 # -----------------------------------------------------------------------------
 bsub:
   conda_env: pyml
   queue: l
-  email: amemiya.kohki.q2@dc.tohoku.ac.jp
+  email: example@dc.tohoku.ac.jp
 
 # -----------------------------------------------------------------------------
 # [DATA] - Input Data Settings
@@ -30,9 +28,9 @@ bsub:
 # -----------------------------------------------------------------------------
 data:
   files:
-    SigmaNCusp: SigmaNCusp.root
-    QFLambda: QFLambda.root
-    QFSigmaZ: QFSigmaZ.root
+    SigmaNCusp: SigmaNCusp_mm.root
+    QFLambda: QFLambda_mm.root
+    QFSigmaZ: QFSigmaZ_mm.root
   tree_name: g4s2s
   label_column: label
   feature_columns:
@@ -48,11 +46,14 @@ data:
     - t2_uy
     - t2_uz
     - t2_dedx
+    - mm
   fraction: 1.0
 
 # -----------------------------------------------------------------------------
 # [TUNING] - Hyperparameter Optimization (src/tune.py)
 # -----------------------------------------------------------------------------
+# job_name           : bsub job name (-J option)
+# log_file           : LSF log file path (-o option)
 # seed               : RNG seed for reproducibility (leave blank for random)
 # fraction           : Data fraction for tuning (keep small for speed, e.g., 0.01)
 # val_split          : Validation set split ratio
@@ -69,8 +70,8 @@ data:
 # -----------------------------------------------------------------------------
 tuning:
   bsub:
-    job_name: e90_tune
-    log_file: lsflog/tune.log
+    job_name: tune_example
+    log_file: lsflog/tune_example.log
   seed: 42
   fraction: 0.01
   val_split: 0.2
@@ -79,24 +80,25 @@ tuning:
   num_workers: 2
   direction: maximize
   search_space:
-    batch_size: [256, 512, 1024]
-    n_layers: {min: 2, max: 6}
+    batch_size: [512, 1024, 2048]
+    n_layers: {min: 3, max: 8}
     hidden_units: {min: 256, max: 1024}
     dropout: {min: 0.1, max: 0.5}
     lr: {min: 1.0e-4, max: 1.0e-2}
-  study_db_file: demo.db
-  study_name: e90_demo
+  study_db_file: example.db
+  study_name: example_tune
   tune_params_file: tuned_params.json
-  study_summary_file: tuning_trials.csv
+  study_summary_file: trials_hisory.csv
   plots:
-    dir: plots
-    optimization_history_file: optimization_history.png
-    param_importances_file: param_importances.png
-    param_slice_file: param_slice.png
+    optimization_history_file: history.png
+    param_importances_file: importances.png
+    param_slice_file: slice.png
 
 # -----------------------------------------------------------------------------
 # [TRAINING] - Final Model Training (src/train.py)
 # -----------------------------------------------------------------------------
+# job_name                : bsub job name (-J option)
+# log_file                : LSF log file path (-o option)
 # seed                    : RNG seed for training
 # fraction                : Data fraction (usually 1.0 for final training)
 # val_split               : Validation set split ratio
@@ -113,19 +115,19 @@ tuning:
 # -----------------------------------------------------------------------------
 training:
   bsub:
-    job_name: e90_train
-    log_file: lsflog/train.log
+    job_name: train_example
+    log_file: lsflog/train_example.log
   seed: 90
   fraction: 1.0
   val_split: 0.2
   epochs: 50
   patience: 10
   num_workers: 2
-  checkpoint_file: train.pth
-  model_output_file: train.pth
-  scaler_output_file: demo_scaler.pkl
+  checkpoint_file: example.pth
+  model_output_file: example.pth
+  scaler_output_file: example.pkl
   best_params_file: tuned_params.json
-  metrics_output_file: train_metrics.json
+  metrics_output_file: train_metrics_example.json
   predictions_output_file: predictions.csv
   plot_output_file: train_history.png
 
@@ -136,8 +138,8 @@ test:
   fraction: 1.0
   batch_size: 128
   num_workers: 8
-  metrics_output_file: demo_test_metrics.json
-  predictions_output_file: demo_test_predictions.csv
+  metrics_output_file: test_metrics.json
+  predictions_output_file: test_predictions.csv
 
 # -----------------------------------------------------------------------------
 # [SYSTEM]
