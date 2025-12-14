@@ -192,8 +192,6 @@ def run_explanation(config_path):
     plt.close()
     print(f"Saved: {paths['plot_bar']}")
 
-    print("SHAP explanation completed successfully.")
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run SHAP explanation for E90ML model.")
     parser.add_argument("config", help="Path to the configuration YAML file.")

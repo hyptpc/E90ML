@@ -182,6 +182,7 @@ def load_data(
     label_mapping: Optional[dict],
     fraction: float,
     random_state: Optional[int],
+    shuffle: bool = True,
 ) -> Tuple[pd.DataFrame, int]:
     """
     Load ROOT files into a single DataFrame, optionally downsample, and remap labels.
@@ -205,10 +206,17 @@ def load_data(
 
     data = pd.concat(dfs, ignore_index=True)
 
-    if fraction < 1.0:
-        data = data.sample(frac=fraction, random_state=random_state).reset_index(drop=True)
+    if shuffle:
+        if fraction < 1.0:
+            data = data.sample(frac=fraction, random_state=random_state).reset_index(drop=True)
+        else:
+            data = data.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
     else:
-        data = data.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
+        if fraction < 1.0:
+            n_keep = max(1, int(len(data) * fraction))
+            data = data.iloc[:n_keep].reset_index(drop=True)
+        else:
+            data = data.reset_index(drop=True)
 
     if label_mapping:
         sig_labels = set(label_mapping.get("signal_labels", []))

@@ -1,9 +1,11 @@
 import argparse
 import json
 import pickle
+from pathlib import Path
 
 import pandas as pd
 import torch
+import uproot
 from torch.utils.data import DataLoader
 
 from common import (
@@ -22,6 +24,27 @@ from common import (
     load_data,
     compute_f1,
 )
+
+
+def save_predictions_to_root(input_path: Path, tree_name: str, predictions: list, output_path: Path):
+    """
+    Append predicted labels (0=bg, 1=signal) as a new branch named 'out' to the ROOT file.
+    """
+    with uproot.open(input_path) as infile:
+        tree = infile[tree_name]
+        df = tree.arrays(library="pd")
+
+    if len(predictions) != len(df):
+        raise ValueError(
+            f"Prediction length ({len(predictions)}) does not match entries in {input_path} ({len(df)})."
+        )
+
+    df = df.copy()
+    df["out"] = pd.Series(predictions, dtype="int32")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with uproot.recreate(output_path) as outfile:
+        outfile[tree_name] = df
 
 
 def evaluate(config, base_dir):
@@ -55,6 +78,7 @@ def evaluate(config, base_dir):
         label_mapping=label_mapping,
         fraction=fraction,
         random_state=seed,
+        shuffle=False,  # Preserve tree entry order for ROOT output
     )
 
     scaler_raw = get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
@@ -122,6 +146,7 @@ def evaluate(config, base_dir):
     records = []
     all_true = []
     all_pred = []
+    ordered_preds = []
 
     with torch.no_grad():
         for inputs, labels_batch in data_loader:
@@ -143,6 +168,7 @@ def evaluate(config, base_dir):
                             "prob_background": float(1 - prob),
                         }
                     )
+                ordered_preds.extend(preds.cpu().numpy().tolist())
             else:
                 loss = criterion(outputs, labels_batch)
                 probs = torch.softmax(outputs, dim=1).cpu()
@@ -155,6 +181,7 @@ def evaluate(config, base_dir):
                     for cls_idx in range(num_classes):
                         row[f"prob_{cls_idx}"] = float(prob_vec[cls_idx])
                     records.append(row)
+                ordered_preds.extend(preds.cpu().numpy().tolist())
 
             total += labels_batch.size(0)
             correct += (preds.to(labels_batch.device) == labels_batch).sum().item()
@@ -195,6 +222,23 @@ def evaluate(config, base_dir):
     with metrics_output_path.open("w") as f:
         json.dump(metrics_payload, f, indent=4)
     print(f"Saved test metrics to '{metrics_output_path}'.")
+
+    # Save predictions back into a ROOT file alongside the original branches.
+    if len(files) != 1:
+        raise ValueError(f"ROOT output expects a single input file, but got {len(files)}.")
+    if len(ordered_preds) != len(data_df):
+        raise ValueError(
+            "Prediction count does not match loaded data. Ensure test.fraction=1.0 for ROOT output."
+        )
+    root_output_raw = get_config_value(test_cfg, "root_output_file", "root_output_path") or Path(files[0]).name
+    root_output_path = resolve_dir(root_output_raw, DEFAULT_OUTPUT_DIR, base_dir)
+    save_predictions_to_root(
+        input_path=Path(files[0]),
+        tree_name=tree_name,
+        predictions=ordered_preds,
+        output_path=root_output_path,
+    )
+    print(f"Saved ROOT with predictions to '{root_output_path}'.")
 
 
 def parse_args():

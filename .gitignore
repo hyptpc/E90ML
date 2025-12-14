@@ -1,6 +1,11 @@
 *.root
 *.log
 *.csv
+*.png
+*.db
+*.pkl
+*.pth
+*.yaml
+*.json
 G4S2S
-ana
 src/__pycache__
