@@ -24,8 +24,14 @@ bsub_cfg = dict(cfg.get("bsub") or {})
 test_cfg = cfg.get("test") or {}
 bsub_cfg.update(test_cfg.get("bsub") or {})
 
-queue = bsub_cfg.get("queue", "s")
-conda_env = bsub_cfg.get("conda_env", "base")
+required = ["queue", "conda_env"]
+missing = [k for k in required if not bsub_cfg.get(k)]
+if missing:
+    print(f"echo 'Missing required bsub settings: {', '.join(missing)}' >&2")
+    sys.exit(1)
+
+queue = bsub_cfg.get("queue")
+conda_env = bsub_cfg.get("conda_env")
 job_name = bsub_cfg.get("job_name", "e90_test")
 log_file = bsub_cfg.get("log_file", "lsflog/test.log")
 email = bsub_cfg.get("email", "")
