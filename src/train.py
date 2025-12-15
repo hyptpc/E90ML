@@ -4,11 +4,10 @@ import json
 import pickle
 import random
 import gc
+import csv
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -348,71 +347,29 @@ def train_final(config, base_dir):
     _plot_training_curves(history, plot_output_path)
     print(f"Saved training curves to '{plot_output_path}'.")
 
-    # Metrics
-    metrics_output_raw = get_config_value(training_cfg, "metrics_output_file", "metrics_output_path")
-    if not metrics_output_raw:
-        raise ValueError("Config must set training.metrics_output_file.")
-    metrics_output_path = resolve_dir(metrics_output_raw, OUTPUT_DIR, base_dir)
-    metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
-    metrics_payload = {
-        "train_loss": history["train_loss"],
-        "val_loss": history["val_loss"],
-        "train_f1": history["train_f1"],
-        "val_f1": history["val_f1"],
-        "best_val_f1": best_val_f1,
-        "epochs_run": len(history["train_loss"]),
-        "batch_size": batch_size,
-        "learning_rate": lr,
-        "num_classes": num_classes,
-        "features": features,
-    }
-    with metrics_output_path.open("w") as f:
-        json.dump(metrics_payload, f, indent=4)
-    print(f"Saved metrics to '{metrics_output_path}'.")
-
-    # Predictions (on FULL dataset or Test set)
-    # Here we predict on the Validation dataset
-    predictions_output_raw = get_config_value(
-        training_cfg, "predictions_output_file", "predictions_output_path"
+    # Training history (loss/F1 per epoch)
+    history_output_raw = get_config_value(
+        training_cfg, "history_output_file", "metrics_output_file", "metrics_output_path"
     )
-    if not predictions_output_raw:
-        raise ValueError("Config must set training.predictions_output_file.")
-    predictions_output_path = resolve_dir(predictions_output_raw, OUTPUT_DIR, base_dir)
-    predictions_output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not history_output_raw:
+        raise ValueError("Config must set training.history_output_file.")
+    history_output_path = resolve_dir(history_output_raw, OUTPUT_DIR, base_dir)
+    history_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    val_loader_seq = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    model.eval()
-    records = []
-    with torch.no_grad():
-        for inputs, labels in val_loader_seq:
-            inputs = inputs.to(device)
-            outputs = model(inputs)
-            if num_classes == 2:
-                probs = torch.sigmoid(outputs.view(-1)).cpu()
-                preds = (probs > 0.5).long()
-                for true_label, pred_label, prob in zip(labels, preds, probs):
-                    records.append(
-                        {
-                            "true_label": int(true_label),
-                            "pred_label": int(pred_label),
-                            "prob_signal": float(prob),
-                            "prob_background": float(1 - prob),
-                        }
-                    )
-            else:
-                probs = torch.softmax(outputs, dim=1).cpu()
-                preds = torch.argmax(probs, dim=1)
-                for true_label, pred_label, prob_vec in zip(labels, preds, probs):
-                    row = {
-                        "true_label": int(true_label),
-                        "pred_label": int(pred_label),
-                    }
-                    for cls_idx in range(num_classes):
-                        row[f"prob_{cls_idx}"] = float(prob_vec[cls_idx])
-                    records.append(row)
-
-    pd.DataFrame.from_records(records).to_csv(predictions_output_path, index=False)
-    print(f"Saved predictions (validation set) to '{predictions_output_path}'.")
+    with history_output_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["epoch", "train_loss", "val_loss", "train_f1", "val_f1"])
+        for idx in range(len(history["train_loss"])):
+            writer.writerow(
+                [
+                    idx + 1,
+                    history["train_loss"][idx],
+                    history["val_loss"][idx],
+                    history["train_f1"][idx],
+                    history["val_f1"][idx],
+                ]
+            )
+    print(f"Saved training history to '{history_output_path}'.")
 
 
 def parse_args():

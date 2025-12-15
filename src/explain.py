@@ -1,7 +1,6 @@
-import argparse
 import json
 import pickle
-import sys
+from pathlib import Path
 import numpy as np
 import torch
 import shap
@@ -12,85 +11,79 @@ import matplotlib.pyplot as plt
 
 # Import custom modules
 from common import (
-    load_config,
-    resolve_data_files,
     load_data,
     create_model_from_params,
-    resolve_dir,
     apply_plot_style,
     DEFAULT_LABEL_MAPPING,
-    PTH_DIR,
-    TUNE_DIR,
-    OUTPUT_DIR,
 )
 
-def run_explanation(config_path):
-    """
-    Runs SHAP analysis to explain the trained model's predictions.
-    """
-    
-    # -------------------------------------------------------------------------
-    # 1. Configuration & Path Definitions
-    # -------------------------------------------------------------------------
-    config, base_dir = load_config(config_path)
-    data_cfg = config.get("data", {})
-    explain_cfg = config.get("explain", {})
-    train_cfg = config.get("training", {})
-    tune_cfg = config.get("tuning", {})
+# -----------------------------------------------------------------------------
+# User-editable parameters (no YAML required)
+# -----------------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-    # Determine best_params_file, checking training then tuning config
-    best_params_file = train_cfg.get("best_params_file") or tune_cfg.get("best_params_file")
-    if not best_params_file:
-        raise ValueError("Could not find 'best_params_file' in training or tuning config.")
+# Data
+DATA_FILES = [
+    PROJECT_ROOT / "data" / "input" / "SigmaNCusp_mm.root",
+    PROJECT_ROOT / "data" / "input" / "QFLambda_mm.root",
+    PROJECT_ROOT / "data" / "input" / "QFSigmaZ_mm.root",
+]
+TREE_NAME = "g4s2s"
+LABEL_COLUMN = "label"
+FEATURE_COLUMNS = [
+    "t0_ux",
+    "t0_uy",
+    "t0_uz",
+    "t0_dedx",
+    "t1_ux",
+    "t1_uy",
+    "t1_uz",
+    "t1_dedx",
+    "t2_ux",
+    "t2_uy",
+    "t2_uz",
+    "t2_dedx",
+    "mm",
+]
+LABEL_MAPPING = DEFAULT_LABEL_MAPPING  # remap to binary: signal=1, background=0
+SAMPLE_FRACTION = 0.1  # fraction of data for SHAP (keep small; SHAP is expensive)
+SEED = 42
 
-    # Define all input/output paths at the beginning for clarity
-    paths = {
-        # Inputs
-        "scaler": resolve_dir(
-            train_cfg.get("scaler_output_file"), PTH_DIR, base_dir
-        ),
-        "model": resolve_dir(
-            train_cfg.get("model_output_file"), PTH_DIR, base_dir
-        ),
-        "best_params": resolve_dir(
-            best_params_file, 
-            TUNE_DIR, 
-            base_dir
-        ),
-        # Outputs
-        "plot_summary": resolve_dir("shap_summary.png", OUTPUT_DIR, base_dir),
-        "plot_bar": resolve_dir("shap_importance_bar.png", OUTPUT_DIR, base_dir)
-    }
+# Model artifacts
+SCALER_PATH = PROJECT_ROOT / "param" / "pth" / "example.pkl"
+MODEL_PATH = PROJECT_ROOT / "param" / "pth" / "example.pth"
+BEST_PARAMS_PATH = PROJECT_ROOT / "param" / "tune" / "tuned_params.json"
+
+# Output paths
+PLOT_SUMMARY_PATH = PROJECT_ROOT / "data" / "output" / "shap_summary.png"
+PLOT_BAR_PATH = PROJECT_ROOT / "data" / "output" / "shap_importance_bar.png"
+
+# SHAP sampling sizes
+BACKGROUND_SAMPLES = 200
+TEST_SAMPLES = 500
+
+
+def run_explanation():
+    """Runs SHAP analysis to explain the trained model's predictions."""
+    np.random.seed(SEED)
 
     print("--- Configuration ---")
-    print(f"Config File : {config_path}")
-    print(f"Model Path  : {paths['model']}")
-    print(f"Scaler Path : {paths['scaler']}")
-    print(f"Output Dir  : {paths['plot_summary'].parent}")
+    print(f"Model Path  : {MODEL_PATH}")
+    print(f"Scaler Path : {SCALER_PATH}")
+    print(f"Params Path : {BEST_PARAMS_PATH}")
+    print(f"Output Dir  : {PLOT_SUMMARY_PATH.parent}")
     print("---------------------")
 
     # -------------------------------------------------------------------------
     # 2. Load Data (Sampled)
     # -------------------------------------------------------------------------
     print("Loading data...")
-    files = resolve_data_files(data_cfg, base_dir)
-    features = data_cfg.get("feature_columns")
-    tree_name = data_cfg.get("tree_name")
-    label_column = data_cfg.get("label_column")
-    label_mapping = data_cfg.get("label_mapping")
-    
-    if label_mapping is None:
-        label_mapping = DEFAULT_LABEL_MAPPING
-    if tree_name is None or features is None or label_column is None:
-        raise ValueError("Config must define tree_name, feature_columns, and label_column under data.")
+    files = [str(p) for p in DATA_FILES]
+    features = FEATURE_COLUMNS
+    tree_name = TREE_NAME
+    label_column = LABEL_COLUMN
+    label_mapping = LABEL_MAPPING
 
-    # Determine sampling fraction for SHAP from YAML (explain.fraction or data.fraction)
-    fraction = explain_cfg.get("fraction", data_cfg.get("fraction"))
-    if fraction is None:
-        raise ValueError("Config must define 'explain.fraction' or 'data.fraction' for SHAP sampling.")
-    fraction = float(fraction)
-    
-    # [Debug] Print features to ensure they are loaded correctly
     print(f"Features list ({len(features)}): {features}")
 
     # Load a fraction of data. SHAP is computationally expensive.
@@ -100,8 +93,8 @@ def run_explanation(config_path):
         features=features,
         label_column=label_column,
         label_mapping=label_mapping,
-        fraction=fraction, 
-        random_state=42
+        fraction=float(SAMPLE_FRACTION),
+        random_state=SEED,
     )
     
     X_raw = df[features].values.astype(np.float32)
@@ -111,7 +104,7 @@ def run_explanation(config_path):
     # 3. Load Scaler & Preprocess
     # -------------------------------------------------------------------------
     print("Loading scaler...")
-    with open(paths["scaler"], "rb") as f:
+    with open(SCALER_PATH, "rb") as f:
         scaler = pickle.load(f)
     
     X_scaled = scaler.transform(X_raw)
@@ -120,7 +113,7 @@ def run_explanation(config_path):
     # 4. Load Model
     # -------------------------------------------------------------------------
     print("Loading model parameters...")
-    with open(paths["best_params"], "r") as f:
+    with open(BEST_PARAMS_PATH, "r") as f:
         best_params = json.load(f)
 
     device = torch.device("cpu")
@@ -132,7 +125,7 @@ def run_explanation(config_path):
     )
     
     print("Loading model weights...")
-    state = torch.load(paths["model"], map_location=device)
+    state = torch.load(MODEL_PATH, map_location=device)
     if isinstance(state, dict):
         if "best_model_state_dict" in state:
             state = state["best_model_state_dict"]
@@ -145,8 +138,8 @@ def run_explanation(config_path):
     # -------------------------------------------------------------------------
     # 5. Compute SHAP Values
     # -------------------------------------------------------------------------
-    n_background = 200
-    n_test = 500
+    n_background = BACKGROUND_SAMPLES
+    n_test = TEST_SAMPLES
     
     if len(X_scaled) < (n_background + n_test):
         raise ValueError("Not enough data loaded for SHAP sampling.")
@@ -183,7 +176,7 @@ def run_explanation(config_path):
     # -------------------------------------------------------------------------
     X_test_original = scaler.inverse_transform(test_data.cpu().numpy())
     
-    paths["plot_summary"].parent.mkdir(parents=True, exist_ok=True)
+    PLOT_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     apply_plot_style()
 
     # Plot A: Summary Plot (Beeswarm)
@@ -196,9 +189,9 @@ def run_explanation(config_path):
         show=False,
         plot_size=(10, 8) 
     )
-    plt.savefig(paths["plot_summary"], bbox_inches='tight')
+    plt.savefig(PLOT_SUMMARY_PATH, bbox_inches='tight')
     plt.close()
-    print(f"Saved: {paths['plot_summary']}")
+    print(f"Saved: {PLOT_SUMMARY_PATH}")
 
     # Plot B: Bar Plot (Global Importance)
     print("Generating importance bar plot...")
@@ -211,13 +204,9 @@ def run_explanation(config_path):
         show=False,
         plot_size=(10, 8)
     )
-    plt.savefig(paths["plot_bar"], bbox_inches='tight')
+    plt.savefig(PLOT_BAR_PATH, bbox_inches='tight')
     plt.close()
-    print(f"Saved: {paths['plot_bar']}")
+    print(f"Saved: {PLOT_BAR_PATH}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run SHAP explanation for E90ML model.")
-    parser.add_argument("config", help="Path to the configuration YAML file.")
-    args = parser.parse_args()
-    
-    run_explanation(args.config)
+    run_explanation()

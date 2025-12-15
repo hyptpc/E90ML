@@ -109,8 +109,7 @@ tuning:
 # model_output_file       : Path to save the final model
 # scaler_output_file      : Path to save the scaler
 # best_params_file        : Path to load tuned parameters from
-# metrics_output_file     : Path to save training metrics (json)
-# predictions_output_file : Path to save validation predictions (csv)
+# history_output_file     : Path to save per-epoch train/val loss & F1 history (csv)
 # plot_output_file        : Path to save training history plot (png)
 # -----------------------------------------------------------------------------
 training:
@@ -127,13 +126,18 @@ training:
   model_output_file: example.pth
   scaler_output_file: example.pkl
   best_params_file: tuned_params.json
-  metrics_output_file: train_metrics_example.json
-  predictions_output_file: predictions.csv
+  history_output_file: train_history_example.csv
   plot_output_file: train_history.png
 
 # -----------------------------------------------------------------------------
 # [TEST] - Inference Settings (src/test.py)
 # -----------------------------------------------------------------------------
+# input_file   : Test ROOT file (looked up under data/input if relative)
+# bsub.*       : Job name/log file used by test.sh when submitting to LSF
+# fraction     : Fraction of test data to evaluate (use 1.0 for full set)
+# batch_size   : DataLoader batch size for inference
+# num_workers  : DataLoader workers
+# output_file  : Output ROOT file with predictions branch ('out')
 test:
   input_file: test.root
   bsub:
