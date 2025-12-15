@@ -306,10 +306,15 @@ def train_final(config, base_dir):
     print(f"Best model saved to '{model_output_path}'.")
 
     # Plotting
+    plots_cfg = training_cfg.get("plots", {})
     plot_output_raw = get_config_value(
+        plots_cfg, "training_curve", "training_curves", "plot_file", "plot_path"
+    ) or get_config_value(
         training_cfg, "plot_output_file", "plot_output_path", "plots_path", "plots_dir"
     )
-    plot_output_path = resolve_dir(plot_output_raw or "training_curves.png", OUTPUT_DIR, base_dir)
+    project_root = base_dir.parents[1] if len(base_dir.parents) > 1 else base_dir
+    default_plots_dir = resolve_dir(plots_cfg.get("save_dir", "plots"), project_root / "plots", base_dir)
+    plot_output_path = resolve_dir(plot_output_raw or "training_curves.png", default_plots_dir, base_dir)
     if plot_output_path.suffix == "":
         plot_output_path = plot_output_path / "training_curves.png"
 

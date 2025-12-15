@@ -138,7 +138,7 @@ def objective(trial, config, base_dir):
     return best_val_f1
 
 
-def save_optuna_plots(study, plots_dir: Path):
+def save_optuna_plots(study, plots_dir: Path, filenames: dict):
     """Save Optuna analysis plots to PNG files."""
     apply_plot_style()
     plt.switch_backend('Agg')
@@ -159,20 +159,20 @@ def save_optuna_plots(study, plots_dir: Path):
         # 1. Optimization History
         fig = ovm.plot_optimization_history(study)
         _tight_layout_safe(fig)
-        fig.savefig(plots_dir / "opt_history.png")
+        fig.savefig(plots_dir / filenames.get("optimization_history", "opt_history.png"))
         plt.close() # Free memory
 
         # 2. Slice plot (relationship between each parameter and objective)
         fig = ovm.plot_slice(study)
         _tight_layout_safe(fig)
-        fig.savefig(plots_dir / "opt_slice.png")
+        fig.savefig(plots_dir / filenames.get("slice", "opt_slice.png"))
         plt.close()
 
         # 3. Param Importances
         try:
             fig = ovm.plot_param_importances(study)
             _tight_layout_safe(fig)
-            fig.savefig(plots_dir / "opt_importances.png")
+            fig.savefig(plots_dir / filenames.get("param_importances", "opt_importances.png"))
             plt.close()
         except Exception as e:
             print(f"Skipping param_importances plot (needs more than 1 param): {e}")
@@ -208,7 +208,12 @@ def run_tuning(config, base_dir):
     project_root = base_dir.parents[1] if len(base_dir.parents) > 1 else base_dir
     default_plots_dir = project_root / "plots"
     plots_dir = resolve_dir(plots_dir_raw, default_plots_dir, base_dir)
-    save_optuna_plots(study, plots_dir)
+    plot_filenames = {
+        "optimization_history": plots_cfg.get("optimization_history", "opt_history.png"),
+        "slice": plots_cfg.get("slice", "opt_slice.png"),
+        "param_importances": plots_cfg.get("param_importances", "opt_importances.png"),
+    }
+    save_optuna_plots(study, plots_dir, plot_filenames)
 
 
 def parse_args():

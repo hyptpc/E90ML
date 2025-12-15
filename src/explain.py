@@ -36,13 +36,17 @@ def explain_model(config, base_dir):
     
     # Output location
     save_dir_raw = explain_cfg.get("save_dir", "explanations")
-    output_dir = resolve_dir(save_dir_raw, DEFAULT_OUTPUT_DIR, base_dir)
+    project_root = base_dir.parents[1] if len(base_dir.parents) > 1 else base_dir
+    default_output_dir = project_root / "plots"
+    output_dir = resolve_dir(save_dir_raw, default_output_dir, base_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Explanation results will be saved to: {output_dir}")
 
     # Filenames
     feat_prefix = explain_cfg.get("feature_importance_prefix", "feat_imp")
     edge_prefix = explain_cfg.get("edge_importance_prefix", "edges")
+    feat_filename = explain_cfg.get("feature_importance_file")
+    edge_filename = explain_cfg.get("edge_importance_file")
     
     # Target selection
     target_labels = explain_cfg.get("target_labels", [0, 1])
@@ -120,7 +124,8 @@ def explain_model(config, base_dir):
             plt.title(f"Feature Importance (Event {i}, Label {label})")
             plt.ylabel("Importance Score")
             plt.tight_layout()
-            save_path = output_dir / f"{feat_prefix}_evt{i}_label{label}.png"
+            filename = feat_filename or f"{feat_prefix}_evt{i}_label{label}.png"
+            save_path = output_dir / filename
             plt.savefig(save_path)
             plt.close()
 
@@ -129,7 +134,8 @@ def explain_model(config, base_dir):
             edge_index = batch.edge_index.cpu().numpy()
             top_indices = np.argsort(edge_mask)[::-1][:5]
             
-            txt_path = output_dir / f"{edge_prefix}_evt{i}_label{label}.txt"
+            txt_name = edge_filename or f"{edge_prefix}_evt{i}_label{label}.txt"
+            txt_path = output_dir / txt_name
             with open(txt_path, "w") as f:
                 f.write(f"Top important edges for Event {i} (Label {label}):\n")
                 for idx in top_indices:
