@@ -135,11 +135,14 @@ training:
 # [TEST] - Inference Settings (src/test.py)
 # -----------------------------------------------------------------------------
 test:
+  input_file: test.root
+  bsub:
+    job_name: test
+    log_file: lsflog/test.log
   fraction: 1.0
   batch_size: 128
-  num_workers: 8
-  metrics_output_file: test_metrics.json
-  predictions_output_file: test_predictions.csv
+  num_workers: 2
+  output_file: "test_output.root"
 
 # -----------------------------------------------------------------------------
 # [SYSTEM]

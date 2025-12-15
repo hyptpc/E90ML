@@ -13,9 +13,9 @@
 #include <vector>
 
 // Number of events to read from each input sample.
-const int target_sigmaNCusp = 76000;
-const int target_qfLambda = 155591;
-const int target_qfSigmaZ = 43685;
+const int target_sigmaNCusp = 29349;
+const int target_qfLambda = 36357;
+const int target_qfSigmaZ = 12975;
 
 struct EventVars {
   Int_t label = 0;
