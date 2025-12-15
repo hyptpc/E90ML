@@ -210,6 +210,7 @@ def evaluate(config, base_dir):
     total = 0
     correct = 0
     ordered_preds = [] 
+    ordered_labels = []
 
     print("Starting inference...")
     with torch.no_grad():
@@ -231,9 +232,31 @@ def evaluate(config, base_dir):
 
             total += labels_batch.size(0)
             correct += (preds.to(labels_batch.device) == labels_batch).sum().item()
+            ordered_labels.extend(labels_batch.cpu().numpy().tolist())
 
     accuracy = correct / total if total > 0 else 0.0
     print(f"Inference complete. Accuracy: {accuracy:.4f}")
+
+    # Event-level summary
+    positive_label = 1  # signal is mapped to 1 by load_data when label_mapping is provided
+    true_signal_count = sum(1 for lbl in ordered_labels if lbl == positive_label)
+    predicted_signal_count = sum(1 for pred in ordered_preds if pred == positive_label)
+    true_signal_predicted = sum(
+        1 for pred, lbl in zip(ordered_preds, ordered_labels) if pred == positive_label and lbl == positive_label
+    )
+
+    def _pct(numerator: int, denominator: int) -> float:
+        return (numerator / denominator * 100.0) if denominator else 0.0
+
+    print("Event counts:")
+    print(f"  Total events: {total}")
+    print(f"  SigmaNCusp (true signal) events: {true_signal_count}")
+    print(f"  Predicted as signal: {predicted_signal_count}")
+    print(
+        "  SigmaNCusp predicted as signal: "
+        f"{true_signal_predicted} "
+        f"({_pct(true_signal_predicted, predicted_signal_count):.2f}% of predicted signals)"
+    )
 
     # 8. Save Output to ROOT
     root_output_raw = get_config_value(test_cfg, "output_file", "root_output_path")
