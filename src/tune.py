@@ -1,35 +1,29 @@
 import argparse
 import json
-import random
 import gc
-import sys
-import os
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+from pathlib import Path
 
-import optuna
 import numpy as np
+import optuna
+import matplotlib.pyplot as plt
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+# PyG Loader
+from torch_geometric.loader import DataLoader as PyGDataLoader
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from optuna.visualization.matplotlib import (
-    plot_optimization_history,
-    plot_param_importances,
-    plot_slice
-)
+
+# Optuna Visualization (Matplotlib backend for static images)
+import optuna.visualization.matplotlib as ovm
 
 from common import (
-    E90Dataset,
-    OUTPUT_DIR,
+    E90GraphDataset,
+    create_gnn_model_from_params,
     LABEL_MAPPING,
     TUNE_DIR,
     get_config_value,
-    apply_plot_style,
-    create_model_from_params,
+    split_track_features,
     load_config,
     resolve_data_files,
     resolve_device,
@@ -37,345 +31,177 @@ from common import (
     _resolve_seed,
     load_data,
     compute_f1,
+    apply_plot_style,
 )
 
 
-def _int_range(cfg, key):
-    item = cfg.get(key)
-    return int(item["min"]), int(item["max"])
-
-
-def _float_range(cfg, key):
-    item = cfg.get(key)
-    return float(item["min"]), float(item["max"])
-
-
-def objective_factory(config, base_dir):
-    """
-    CPU Optimized: Pre-process data ONCE outside the trial loop to save time and memory.
-    """
+def objective(trial, config, base_dir):
     data_cfg = config.get("data", {})
     tuning_cfg = config.get("tuning", {})
-    seed = _resolve_seed(tuning_cfg.get("seed"), config.get("seed"))
     
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+    # 1. Hyperparameter sampling for the GNN
+    search_space = tuning_cfg.get("search_space", {})
     
-    files = resolve_data_files(data_cfg, base_dir)
-    if not files:
-        raise ValueError("Config must provide data.files with at least one entry.")
+    # Parameters explored for the GNN
+    params = {
+        "n_layers": trial.suggest_int("n_layers", search_space.get("n_layers", {}).get("min", 2), search_space.get("n_layers", {}).get("max", 5)),
+        "hidden_units": trial.suggest_int("hidden_units", search_space.get("hidden_units", {}).get("min", 32), search_space.get("hidden_units", {}).get("max", 256)),
+        "dropout_rate": trial.suggest_float("dropout", search_space.get("dropout", {}).get("min", 0.0), search_space.get("dropout", {}).get("max", 0.5)),
+        "lr": trial.suggest_float("lr", search_space.get("lr", {}).get("min", 1e-4), search_space.get("lr", {}).get("max", 1e-2), log=True),
+        "batch_size": trial.suggest_categorical("batch_size", search_space.get("batch_size", [64, 128, 256])),
+    }
 
+    # 2. Data Loading (Inside objective for simplicity, or cache externally)
+    seed = _resolve_seed(tuning_cfg.get("seed"), config.get("seed"))
+    files = resolve_data_files(data_cfg, base_dir)
     tree_name = data_cfg.get("tree_name")
     features = data_cfg.get("feature_columns")
     label_column = data_cfg.get("label_column")
-    label_mapping = data_cfg.get("label_mapping")
-    if label_mapping is None:
-        label_mapping = LABEL_MAPPING
-    tune_fraction = float(tuning_cfg["fraction"])
-    val_split = float(tuning_cfg["val_split"])
+    label_mapping = data_cfg.get("label_mapping", LABEL_MAPPING)
 
-    print("Loading data...")
-    dataset_df, num_classes = load_data(
+    feature_cols_dict = split_track_features(features)
+
+    fraction = float(tuning_cfg.get("fraction", 0.1))
+
+    full_df, num_classes = load_data(
         files=files,
         tree_name=tree_name,
         features=features,
         label_column=label_column,
         label_mapping=label_mapping,
-        fraction=tune_fraction,
-        random_state=seed,
-    )
-
-    # --- Memory Optimization Block ---
-    print("Processing data (Split & Scale)...")
-    feature_matrix = dataset_df[features].values.astype(np.float32)
-    labels = dataset_df[label_column].values.astype(np.int64)
-    
-    del dataset_df
-    gc.collect()
-
-    # 1. Stratified Split (ONCE)
-    train_features, val_features, train_labels, val_labels = train_test_split(
-        feature_matrix,
-        labels,
-        test_size=val_split,
-        stratify=labels,
+        fraction=fraction,
         random_state=seed,
     )
     
-    del feature_matrix, labels
+    train_df, val_df = train_test_split(
+        full_df,
+        test_size=float(tuning_cfg.get("val_split", 0.2)),
+        stratify=full_df[label_column],
+        random_state=seed,
+    )
+    del full_df
     gc.collect()
 
-    # 2. Fit Scaler (ONCE)
-    scaler = StandardScaler()
-    train_features = scaler.fit_transform(train_features)
-    val_features = scaler.transform(val_features)
+    train_dataset = E90GraphDataset(train_df, feature_cols_dict, label_column)
+    val_dataset = E90GraphDataset(val_df, feature_cols_dict, label_column)
 
-    # 3. Create Tensor Datasets (ONCE)
-    train_dataset = E90Dataset(train_features, train_labels)
-    val_dataset = E90Dataset(val_features, val_labels)
+    num_workers = int(tuning_cfg.get("num_workers", 0))
+    train_loader = PyGDataLoader(train_dataset, batch_size=params["batch_size"], shuffle=True, num_workers=num_workers)
+    val_loader = PyGDataLoader(val_dataset, batch_size=params["batch_size"], shuffle=False, num_workers=num_workers)
 
-    del train_features, val_features, train_labels, val_labels
-    gc.collect()
-    print("Data processing complete.")
-    # ---------------------------------
-
-    num_workers = int(tuning_cfg["num_workers"])
-    epochs = int(tuning_cfg["epochs"])
-    search_space_cfg = tuning_cfg["search_space"]
+    # 3. Model Building
+    device = resolve_device(config.get("device", "cpu"))
+    model = create_gnn_model_from_params(params, input_dim=5, num_classes=num_classes).to(device)
     
-    batch_size_candidates = search_space_cfg.get("batch_size")
-    if not isinstance(batch_size_candidates, (list, tuple)):
-        batch_size_candidates = [batch_size_candidates]
-    batch_size_candidates = [int(v) for v in batch_size_candidates]
-    
-    device = resolve_device(config.get("device"))
-    print(f"Tuning using device: {device}")
-    
-    n_layers_min, n_layers_max = _int_range(search_space_cfg, "n_layers")
-    hidden_min, hidden_max = _int_range(search_space_cfg, "hidden_units")
-    dropout_min, dropout_max = _float_range(search_space_cfg, "dropout")
-    lr_min, lr_max = _float_range(search_space_cfg, "lr")
+    optimizer = optim.Adam(model.parameters(), lr=params["lr"])
+    criterion = nn.BCEWithLogitsLoss() if num_classes == 2 else nn.CrossEntropyLoss()
 
-    pos_weight = None
-    if num_classes == 2:
-        num_pos = (train_dataset.y == 1).sum()
-        num_neg = (train_dataset.y == 0).sum()
-        if num_pos > 0:
-            weight_val = float(num_neg) / float(num_pos)
-            pos_weight = torch.tensor(weight_val, dtype=torch.float32).to(device)
+    # 4. Training Loop
+    epochs = int(tuning_cfg.get("epochs", 5))
+    best_val_f1 = 0.0
 
-    def objective(trial):
-        batch_size = trial.suggest_categorical("batch_size", batch_size_candidates)
+    for epoch in range(epochs):
+        model.train()
+        for batch in train_loader:
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            outputs = model(batch.x, batch.edge_index, batch.batch)
+            if num_classes == 2:
+                loss = criterion(outputs.squeeze(1), batch.y.float())
+            else:
+                loss = criterion(outputs, batch.y)
+            loss.backward()
+            optimizer.step()
         
-        train_loader = DataLoader(
-            train_dataset, 
-            batch_size=batch_size, 
-            shuffle=True, 
-            num_workers=num_workers,
-            pin_memory=(device.type == "cuda")
-        )
-        val_loader = DataLoader(
-            val_dataset, 
-            batch_size=batch_size, 
-            shuffle=False, 
-            num_workers=num_workers,
-            pin_memory=(device.type == "cuda")
-        )
-
-        params = {
-            "n_layers": trial.suggest_int("n_layers", n_layers_min, n_layers_max),
-            "hidden_units": trial.suggest_int("hidden_units", hidden_min, hidden_max),
-            "dropout_rate": trial.suggest_float("dropout_rate", dropout_min, dropout_max),
-        }
-
-        model = create_model_from_params(params, input_dim=len(features), num_classes=num_classes).to(device)
-
-        lr = trial.suggest_float("lr", lr_min, lr_max, log=True)
-        optimizer = optim.Adam(model.parameters(), lr=lr)
-
-        if num_classes == 2:
-            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        else:
-            criterion = nn.CrossEntropyLoss()
-
-        for epoch in range(epochs):
-            model.train()
-            for inputs, labels_batch in train_loader:
-                inputs = inputs.to(device)
-                labels_batch = labels_batch.to(device)
-                
-                optimizer.zero_grad()
+        # Validation
+        model.eval()
+        val_preds = []
+        val_targets = []
+        with torch.no_grad():
+            for batch in val_loader:
+                batch = batch.to(device)
+                outputs = model(batch.x, batch.edge_index, batch.batch)
                 if num_classes == 2:
-                    outputs = model(inputs).squeeze(1)
-                    loss = criterion(outputs, labels_batch.float())
+                    preds = (torch.sigmoid(outputs.squeeze(1)) > 0.5).long()
                 else:
-                    outputs = model(inputs)
-                    loss = criterion(outputs, labels_batch)
-                loss.backward()
-                optimizer.step()
+                    preds = torch.argmax(outputs, dim=1)
+                val_targets.extend(batch.y.cpu().numpy().tolist())
+                val_preds.extend(preds.cpu().numpy().tolist())
+        
+        val_f1 = compute_f1(val_targets, val_preds, num_classes)
+        best_val_f1 = max(best_val_f1, val_f1)
+        
+        trial.report(val_f1, epoch)
+        if trial.should_prune():
+            raise optuna.exceptions.TrialPruned()
 
-            # Validation
-            model.eval()
-            val_true = []
-            val_pred = []
-            with torch.no_grad():
-                for inputs, labels_batch in val_loader:
-                    inputs = inputs.to(device)
-                    labels_batch = labels_batch.to(device)
-                    
-                    if num_classes == 2:
-                        outputs = model(inputs).squeeze(1)
-                        predicted = (torch.sigmoid(outputs) > 0.5).long()
-                    else:
-                        outputs = model(inputs)
-                        predicted = torch.argmax(outputs, dim=1)
-                    val_true.extend(labels_batch.cpu().numpy().tolist())
-                    val_pred.extend(predicted.cpu().numpy().tolist())
+    return best_val_f1
 
-            val_f1 = compute_f1(val_true, val_pred, num_classes) if val_true else 0.0
-            
-            trial.report(val_f1, epoch)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
 
-        return val_f1
+def save_optuna_plots(study, plots_dir: Path):
+    """Save Optuna analysis plots to PNG files."""
+    apply_plot_style()
+    plt.switch_backend('Agg')
 
-    return objective
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Saving optimization plots to {plots_dir} ...")
+
+    try:
+        # 1. Optimization History
+        fig = ovm.plot_optimization_history(study)
+        fig.tight_layout()
+        fig.savefig(plots_dir / "opt_history.png")
+        plt.close() # Free memory
+
+        # 2. Slice plot (relationship between each parameter and objective)
+        fig = ovm.plot_slice(study)
+        fig.tight_layout()
+        fig.savefig(plots_dir / "opt_slice.png")
+        plt.close()
+
+        # 3. Param Importances
+        try:
+            fig = ovm.plot_param_importances(study)
+            fig.tight_layout()
+            fig.savefig(plots_dir / "opt_importances.png")
+            plt.close()
+        except Exception as e:
+            print(f"Skipping param_importances plot (needs more than 1 param): {e}")
+
+    except Exception as e:
+        print(f"Error during plotting: {e}")
 
 
 def run_tuning(config, base_dir):
     tuning_cfg = config.get("tuning", {})
-    direction = tuning_cfg["direction"]
-    target_trials = int(tuning_cfg["n_trials"])
-    
-    best_params_raw = get_config_value(tuning_cfg, "tune_params_file", "best_params_file", "best_params_path")
-    best_params_path = resolve_dir(best_params_raw, TUNE_DIR, base_dir)
+    study_name = tuning_cfg.get("study_name", "e90_gnn_study")
+    storage_path = resolve_dir(tuning_cfg.get("study_db_file", "tune.db"), TUNE_DIR, base_dir)
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
+    storage = f"sqlite:///{storage_path}"
+    direction = tuning_cfg.get("direction", "maximize")
+    n_trials = int(tuning_cfg.get("n_trials", 20))
 
-    trials_raw = get_config_value(tuning_cfg, "study_summary_file", "study_summary_path")
-    trials_path = resolve_dir(trials_raw, OUTPUT_DIR, base_dir) if trials_raw else None
-    
-    plots_cfg = tuning_cfg.get("plots", {})
-    plots_dir = OUTPUT_DIR
-    plot_paths = {
-        "optimization_history": resolve_dir(
-            plots_cfg.get("optimization_history_file", "optimization_history.png"), plots_dir, base_dir
-        ),
-        "param_importances": resolve_dir(
-            plots_cfg.get("param_importances_file", "param_importances.png"), plots_dir, base_dir
-        ),
-        "param_slice": resolve_dir(
-            plots_cfg.get("param_slice_file", "param_slice.png"), plots_dir, base_dir
-        ),
-    }
-    
-    db_file_raw = get_config_value(tuning_cfg, "study_db_file", "db_file") or "e90_optuna.db"
-    db_path = resolve_dir(db_file_raw, TUNE_DIR, base_dir)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    storage_url = f"sqlite:///{db_path}"
-    study_name = tuning_cfg.get("study_name", "e90_hyperopt")
+    study = optuna.create_study(study_name=study_name, storage=storage, direction=direction, load_if_exists=True)
+    study.optimize(lambda trial: objective(trial, config, base_dir), n_trials=n_trials)
 
-    print(f"Optuna database: {storage_url}")
-    print(f"Study Name:      {study_name}")
-    
-    objective = objective_factory(config, base_dir)
-    
-    study = optuna.create_study(
-        study_name=study_name,
-        storage=storage_url,
-        load_if_exists=True,
-        direction=direction
-    )
-    
-    completed_trials = len(study.trials)
-    remaining_trials = target_trials - completed_trials
-    
-    if remaining_trials > 0:
-        print(f"Resuming study. Completed: {completed_trials}, Remaining: {remaining_trials}, Target: {target_trials}")
-        try:
-            study.optimize(objective, n_trials=remaining_trials)
-        except KeyboardInterrupt:
-            print("\nTuning interrupted by user. Progress saved to DB.")
-            sys.exit(0)
-    else:
-        print(f"Study already has {completed_trials} trials (Target: {target_trials}). Skipping optimization.")
-
-    print("Best trial value:", study.best_trial.value)
     print("Best params:", study.best_params)
-
-    best_params = dict(study.best_params)
-
-    best_params_path.parent.mkdir(parents=True, exist_ok=True)
-    with best_params_path.open("w") as f:
-        json.dump(best_params, f, indent=4)
-    print(f"Saved best parameters to '{best_params_path}'.")
-
-    if trials_path:
-        trials_path.parent.mkdir(parents=True, exist_ok=True)
-        df = study.trials_dataframe()
-        df.to_csv(trials_path, index=False)
-        print(f"Saved tuning trials to '{trials_path}'.")
-        
-    # --- Visualization ---
-    def _strip_titles(fig):
-        suptitle = getattr(fig, "_suptitle", None)
-        if suptitle is not None:
-            suptitle.remove()
-            fig._suptitle = None
-        for ax in fig.axes:
-            if ax.get_title():
-                ax.set_title("")
-
-    def _finalize_plot(path, *, title=None, rect=(0, 0, 1, 0.98), adjust=None):
-        fig = plt.gcf()
-        _strip_titles(fig)
-        if title:
-            fig.suptitle(title, y=0.99)
-        try:
-            fig.tight_layout(rect=rect)
-        except Exception as e:
-            print(f"[warn] tight_layout failed: {e}")
-        if adjust:
-            adjust(fig)
-        fig.savefig(path)
-        plt.close(fig)
-
-    def _move_colorbar_to_right(fig, pad=0.02, width=0.02):
-        axes = fig.axes
-        if len(axes) <= 1: return
-        cbar_ax = min(axes, key=lambda ax: ax.get_position().width)
-        other_axes = [ax for ax in axes if ax is not cbar_ax]
-        if not other_axes: return
-        right_edge = max(ax.get_position().x1 for ax in other_axes)
-        pos = cbar_ax.get_position()
-        new_left = min(right_edge + pad, 0.98 - width)
-        new_width = min(width, pos.width, 1.0 - new_left)
-        if new_width > 0:
-            cbar_ax.set_position([new_left, pos.y0, new_width, pos.height])
-
-    print("Generating tuning plots...")
-    for path in plot_paths.values():
-        path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Apply style locally to ensure it works with Agg backend
-    apply_plot_style()
-    saved_plots = []
+    # Save best params
+    out_file = resolve_dir(tuning_cfg.get("tune_params_file", "best_params.json"), TUNE_DIR, base_dir)
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    with out_file.open("w") as f:
+        json.dump(study.best_params, f, indent=4)
 
-    # 1. Optimization History
-    plt.figure()
-    plot_optimization_history(study)
-    _finalize_plot(plot_paths["optimization_history"], title="Optimization History")
-    saved_plots.append(plot_paths["optimization_history"])
-
-    # 2. Hyperparameter Importances
-    try:
-        plt.figure()
-        plot_param_importances(study)
-        _finalize_plot(plot_paths["param_importances"], title="Param Importances")
-        saved_plots.append(plot_paths["param_importances"])
-    except ValueError:
-        print("Skipping param_importances plot.")
-
-    # 3. Slice Plot
-    plt.figure()
-    plot_slice(study)
-    _finalize_plot(
-        plot_paths["param_slice"],
-        title="Param Slice",
-        rect=(0, 0, 0.9, 0.92),
-        adjust=_move_colorbar_to_right,
-    )
-    saved_plots.append(plot_paths["param_slice"])
-
-    if saved_plots:
-        saved_str = ", ".join(str(p) for p in saved_plots)
-        print(f"Saved tuning plots to {saved_str}.")
+    # [ADDED] Save Plots
+    plots_cfg = tuning_cfg.get("plots", {})
+    plots_dir_raw = plots_cfg.get("save_dir", "plots")
+    plots_dir = resolve_dir(plots_dir_raw, TUNE_DIR, base_dir)
+    save_optuna_plots(study, plots_dir)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Hyperparameter tuning for E90 ML model.")
-    parser.add_argument("-c", "--config", required=True, help="Path to config file (yaml/json).")
+    parser = argparse.ArgumentParser(description="Run Hyperparameter Tuning (GNN) with Plotting.")
+    parser.add_argument("-c", "--config", required=True, help="Path to config file.")
     return parser.parse_args()
 
 

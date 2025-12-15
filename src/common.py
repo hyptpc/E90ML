@@ -1,15 +1,19 @@
 import json
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import yaml
 import uproot
 import gc
 from sklearn.metrics import f1_score
-from torch.utils.data import Dataset as TorchDataset
+
+from torch_geometric.data import Data, Dataset as PyGDataset
+from torch_geometric.nn import GCNConv, global_mean_pool
 
 # Standard output directories
 DEFAULT_TUNE_DIR = Path("../tune")
@@ -42,7 +46,6 @@ DEFAULT_PLOT_STYLE = {
     "figure.subplot.bottom": 0.12,
 }
 
-# Default label mapping (SigmaNCusp=1, QFLambda=2, QFSigmaZ=3)
 DEFAULT_REACTION_LABELS = {"SigmaNCusp": 1, "QFLambda": 2, "QFSigmaZ": 3}
 DEFAULT_LABEL_MAPPING = {
     "signal_labels": [DEFAULT_REACTION_LABELS["SigmaNCusp"]],
@@ -80,9 +83,6 @@ def _resolve_path(value: str, base_dir: Path) -> Path:
 
 
 def resolve_dir(value: str, default_dir: Path, base_dir: Path) -> Path:
-    """
-    If value is a bare filename, place it under default_dir. Otherwise resolve relative to config.
-    """
     candidate = Path(value)
     if candidate.is_absolute() or candidate.parent != Path("."):
         return _resolve_path(value, base_dir)
@@ -90,7 +90,6 @@ def resolve_dir(value: str, default_dir: Path, base_dir: Path) -> Path:
 
 
 def resolve_data_files(data_cfg: dict, base_dir: Path) -> list:
-    """Resolve the list of ROOT files to load, preferring the shared input directory."""
     files_cfg = data_cfg.get("files")
     if not files_cfg:
         return []
@@ -123,7 +122,6 @@ def load_config(config_path: str):
 
 
 def get_config_value(cfg: dict, *keys: str) -> Optional[str]:
-    """Return the first non-empty config value from the provided keys."""
     for key in keys:
         value = cfg.get(key)
         if value not in (None, ""):
@@ -131,10 +129,62 @@ def get_config_value(cfg: dict, *keys: str) -> Optional[str]:
     return None
 
 
-def apply_plot_style(overrides: Optional[dict] = None):
-    """Apply shared matplotlib rcParams with optional overrides."""
-    import matplotlib as mpl
+def split_track_features(features: list) -> dict:
+    """
+    Split a flat feature list into track-specific slices for t0, t1, and t2.
+    Expects at least 12 entries (4 features per track).
+    """
+    if features is None or len(features) < 12:
+        raise ValueError("feature_columns must contain at least 12 entries (t0, t1, t2 each with 4 features).")
+    return {
+        "t0": features[0:4],
+        "t1": features[4:8],
+        "t2": features[8:12],
+    }
 
+
+def resolve_best_params_path(training_cfg: dict, tuning_cfg: dict, base_dir: Path, tune_dir: Path = TUNE_DIR) -> Path:
+    """
+    Resolve the path to the tuned hyperparameters file and ensure it exists.
+    """
+    best_params_raw = get_config_value(training_cfg, "best_params_file", "best_params_path") or get_config_value(
+        tuning_cfg, "tune_params_file", "best_params_file", "best_params_path"
+    )
+    if not best_params_raw:
+        raise ValueError("Config must set training.best_params_file or tuning.tune_params_file.")
+
+    best_params_path = resolve_dir(best_params_raw, tune_dir, base_dir)
+    if not best_params_path.exists():
+        raise FileNotFoundError(f"Best parameter file not found at {best_params_path}.")
+    return best_params_path
+
+
+def load_best_params(training_cfg: dict, tuning_cfg: dict, base_dir: Path, tune_dir: Path = TUNE_DIR) -> Tuple[dict, Path]:
+    """
+    Load tuned hyperparameters and return both the dict and resolved path.
+    """
+    best_params_path = resolve_best_params_path(training_cfg, tuning_cfg, base_dir, tune_dir)
+    with best_params_path.open() as f:
+        params = json.load(f)
+    return params, best_params_path
+
+
+def resolve_model_output_path(training_cfg: dict, base_dir: Path, pth_dir: Path = PTH_DIR, must_exist: bool = False) -> Path:
+    """
+    Resolve the model output path under pth_dir (or absolute path).
+    Set must_exist=True to require a saved model to be present.
+    """
+    model_output_raw = get_config_value(training_cfg, "model_output_file", "model_output_path")
+    if not model_output_raw:
+        raise ValueError("Config must set training.model_output_file.")
+    model_output_path = resolve_dir(model_output_raw, pth_dir, base_dir)
+    if must_exist and not model_output_path.exists():
+        raise FileNotFoundError(f"Trained model not found at {model_output_path}.")
+    return model_output_path
+
+
+def apply_plot_style(overrides: Optional[dict] = None):
+    import matplotlib as mpl
     params = dict(DEFAULT_PLOT_STYLE)
     if overrides:
         params.update({k: v for k, v in overrides.items() if v is not None})
@@ -142,9 +192,6 @@ def apply_plot_style(overrides: Optional[dict] = None):
 
 
 def compute_f1(y_true, y_pred, num_classes: int):
-    """
-    Compute F1-score for binary (binary average) or multiclass (macro average) cases.
-    """
     average = "binary" if num_classes == 2 else "macro"
     return f1_score(y_true, y_pred, average=average, zero_division=0)
 
@@ -164,10 +211,6 @@ def resolve_device(device_pref=None) -> torch.device:
 
 
 def _resolve_seed(local_seed, global_seed):
-    """
-    Returns int seed if provided, otherwise None to let ops be random.
-    Accepts empty string as 'no seed'.
-    """
     seed = local_seed if local_seed not in (None, "") else global_seed
     if seed in (None, ""):
         return None
@@ -184,10 +227,6 @@ def load_data(
     random_state: Optional[int],
     shuffle: bool = True,
 ) -> Tuple[pd.DataFrame, int]:
-    """
-    Load ROOT files into a single DataFrame, optionally downsample, and remap labels.
-    Returns a tuple of (dataframe, num_classes).
-    """
     feature_cols = features
     dfs = []
 
@@ -202,7 +241,6 @@ def load_data(
                 raise ValueError(f"Missing feature columns in {fpath}: {missing}")
 
             dfs.append(df[feature_cols + [label_column]])
-
 
     data = pd.concat(dfs, ignore_index=True)
 
@@ -237,39 +275,108 @@ def load_data(
     return data, num_classes
 
 
-class E90Dataset(TorchDataset):
+# --- GNN Classes ---
+
+class E90GraphDataset(PyGDataset):
     """
-    A simple Dataset wrapper for Tensor data.
-    Does NOT handle file loading or scaling logic to avoid leakage.
+    Dataset that converts a Pandas DataFrame into a PyG graph format.
+    Each event becomes a fully connected 3-node graph (t0=ScatPi, t1, t2).
     """
-    def __init__(self, X: np.ndarray, y: np.ndarray):
-        self.X = X.astype(np.float32)
-        self.y = y.astype(np.long)
+    def __init__(self, df: pd.DataFrame, feature_cols_dict: dict, label_col: str):
+        super().__init__()
+        self.data_list = []
+        self._process_dataframe(df, feature_cols_dict, label_col)
 
-    def __len__(self):
-        return len(self.y)
+    def _process_dataframe(self, df, cols, label_col):
+        # Edge index for a fully connected 3-node graph
+        # Node IDs: 0=t0, 1=t1, 2=t2
+        edge_index = torch.tensor([
+            [0, 0, 1, 1, 2, 2],
+            [1, 2, 0, 2, 0, 1]
+        ], dtype=torch.long)
 
-    def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
+        # Pre-extract as NumPy arrays for speed
+        t0_ux = df[cols['t0'][0]].values
+        t0_uy = df[cols['t0'][1]].values
+        t0_uz = df[cols['t0'][2]].values
+        t0_dedx = df[cols['t0'][3]].values
+        
+        t1_ux = df[cols['t1'][0]].values
+        t1_uy = df[cols['t1'][1]].values
+        t1_uz = df[cols['t1'][2]].values
+        t1_dedx = df[cols['t1'][3]].values
+        
+        t2_ux = df[cols['t2'][0]].values
+        t2_uy = df[cols['t2'][1]].values
+        t2_uz = df[cols['t2'][2]].values
+        t2_dedx = df[cols['t2'][3]].values
+        
+        labels = df[label_col].values
+
+        for i in range(len(df)):
+            # Node features: [ux, uy, uz, dedx, is_scat_pi]
+            # t0 (Scat Pi): is_scat_pi = 1
+            node_t0 = [t0_ux[i], t0_uy[i], t0_uz[i], t0_dedx[i], 1.0]
+            # t1 (Track): is_scat_pi = 0
+            node_t1 = [t1_ux[i], t1_uy[i], t1_uz[i], t1_dedx[i], 0.0]
+            # t2 (Track): is_scat_pi = 0
+            node_t2 = [t2_ux[i], t2_uy[i], t2_uz[i], t2_dedx[i], 0.0]
+
+            x = torch.tensor([node_t0, node_t1, node_t2], dtype=torch.float)
+            y = torch.tensor([int(labels[i])], dtype=torch.long)
+
+            data = Data(x=x, edge_index=edge_index, y=y)
+            self.data_list.append(data)
+
+    def len(self):
+        return len(self.data_list)
+
+    def get(self, idx):
+        return self.data_list[idx]
 
 
-def create_model_from_params(params: dict, input_dim: int, num_classes: int) -> torch.nn.Sequential:
-    import torch.nn as nn
+class E90GNN(nn.Module):
+    """
+    Simple GCN (Graph Convolutional Network) model.
+    """
+    def __init__(self, in_channels, hidden_channels, num_layers, dropout_rate, num_classes):
+        super(E90GNN, self).__init__()
+        self.convs = nn.ModuleList()
+        
+        # First layer
+        self.convs.append(GCNConv(in_channels, hidden_channels))
+        
+        # Hidden layers
+        for _ in range(num_layers - 1):
+            self.convs.append(GCNConv(hidden_channels, hidden_channels))
 
-    n_layers = int(params["n_layers"])
-    dropout_rate = float(params["dropout_rate"])
-    hidden_units = int(params["hidden_units"])
+        self.dropout_rate = dropout_rate
+        self.lin = nn.Linear(hidden_channels, 1 if num_classes == 2 else num_classes)
 
-    layers = []
-    in_features = input_dim
+    def forward(self, x, edge_index, batch):
+        # 1. Message Passing (Node Embedding)
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = x.relu()
+            x = F.dropout(x, p=self.dropout_rate, training=self.training)
 
-    for _ in range(n_layers):
-        layers.append(nn.Linear(in_features, hidden_units))
-        layers.append(nn.BatchNorm1d(hidden_units))
-        layers.append(nn.ReLU())
-        layers.append(nn.Dropout(dropout_rate))
-        in_features = hidden_units
+        # 2. Readout (Global Pooling)
+        # Average node features in the graph to summarize each event
+        x = global_mean_pool(x, batch)
 
-    out_features = 1 if num_classes == 2 else num_classes
-    layers.append(nn.Linear(in_features, out_features))
-    return nn.Sequential(*layers)
+        # 3. Classifier
+        x = self.lin(x)
+        return x
+
+
+def create_gnn_model_from_params(params: dict, input_dim: int, num_classes: int) -> nn.Module:
+    """
+    Factory to build a GNN model from a hyperparameter dictionary.
+    """
+    return E90GNN(
+        in_channels=input_dim,
+        hidden_channels=int(params.get("hidden_units", 64)),
+        num_layers=int(params.get("n_layers", 3)),
+        dropout_rate=float(params.get("dropout_rate", 0.2)),
+        num_classes=num_classes
+    )
