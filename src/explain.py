@@ -37,8 +37,8 @@ def explain_model(config, base_dir):
     # Output location
     save_dir_raw = explain_cfg.get("save_dir", "explanations")
     project_root = base_dir.parents[1] if len(base_dir.parents) > 1 else base_dir
-    default_output_dir = project_root / "plots"
-    output_dir = resolve_dir(save_dir_raw, default_output_dir, base_dir)
+    base_plots_dir = (project_root / "plots").resolve()
+    output_dir = (base_plots_dir / Path(save_dir_raw)).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Explanation results will be saved to: {output_dir}")
 

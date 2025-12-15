@@ -313,8 +313,14 @@ def train_final(config, base_dir):
         training_cfg, "plot_output_file", "plot_output_path", "plots_path", "plots_dir"
     )
     project_root = base_dir.parents[1] if len(base_dir.parents) > 1 else base_dir
-    default_plots_dir = resolve_dir(plots_cfg.get("save_dir", "plots"), project_root / "plots", base_dir)
-    plot_output_path = resolve_dir(plot_output_raw or "training_curves.png", default_plots_dir, base_dir)
+    base_plots_dir = (project_root / "plots").resolve()
+    plots_dir_raw = plots_cfg.get("save_dir", "plots")
+    default_plots_dir = (base_plots_dir / Path(plots_dir_raw)).resolve()
+
+    if plot_output_raw:
+        plot_output_path = (default_plots_dir / Path(plot_output_raw)).resolve()
+    else:
+        plot_output_path = default_plots_dir / "training_curves.png"
     if plot_output_path.suffix == "":
         plot_output_path = plot_output_path / "training_curves.png"
 
