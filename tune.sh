@@ -7,8 +7,9 @@ if [ "$#" -ne 1 ]; then
 fi
 
 CONFIG_PATH="$1"
+export CONFIG_PATH
 
-eval "$(python3 - <<'PY'
+eval "$(CONFIG_PATH="$CONFIG_PATH" python3 - <<'PY'
 import os, sys, yaml
 
 config_path = os.path.realpath(os.environ["CONFIG_PATH"])
