@@ -188,7 +188,16 @@ def train_final(config, base_dir):
     if checkpoint_path.exists():
         checkpoint = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(checkpoint.get("model_state_dict", checkpoint))
-        print(f"Resumed from checkpoint: {checkpoint_path}")
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_epoch = checkpoint.get("epoch", -1) + 1
+        best_val_f1 = checkpoint.get("best_val_f1", best_val_f1)
+        best_model_wts = checkpoint.get("best_model_state_dict", best_model_wts)
+        no_improve_count = checkpoint.get("no_improve_count", 0)
+        saved_history = checkpoint.get("history")
+        if saved_history:
+            history = saved_history
+        print(f"Resumed from checkpoint: {checkpoint_path} (start at epoch {start_epoch + 1})")
 
     for epoch in range(start_epoch, epochs):
         model.train()
@@ -270,6 +279,20 @@ def train_final(config, base_dir):
         
         # Collect garbage to keep memory use low
         gc.collect()
+
+        # Save checkpoint for resuming
+        checkpoint_payload = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_val_f1": best_val_f1,
+            "best_model_state_dict": best_model_wts,
+            "history": history,
+            "no_improve_count": no_improve_count,
+            "params": params,
+        }
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(checkpoint_payload, checkpoint_path)
 
         if no_improve_count >= patience:
             print(f"Early stopping triggered. No improvement for {patience} epochs.")
