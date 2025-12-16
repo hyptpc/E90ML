@@ -79,26 +79,25 @@ def run_explanation():
     # -------------------------------------------------------------------------
     print("Loading data...")
     files = [str(p) for p in DATA_FILES]
-    features = FEATURE_COLUMNS
     tree_name = TREE_NAME
     label_column = LABEL_COLUMN
     label_mapping = LABEL_MAPPING
-
-    print(f"Features list ({len(features)}): {features}")
 
     # Load a fraction of data. SHAP is computationally expensive.
     df, num_classes = load_data(
         files=files,
         tree_name=tree_name,
-        features=features,
+        features=FEATURE_COLUMNS,
         label_column=label_column,
         label_mapping=label_mapping,
         fraction=float(SAMPLE_FRACTION),
         random_state=SEED,
     )
+    features = [c for c in df.columns if c != label_column]
+    print(f"Features list ({len(features)}): {features}")
     
     X_raw = df[features].values.astype(np.float32)
-    del df # Free memory
+    del df  # Free memory
 
     # -------------------------------------------------------------------------
     # 3. Load Scaler & Preprocess

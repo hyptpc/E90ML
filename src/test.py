@@ -1,6 +1,5 @@
 import argparse
 import pickle
-import sys
 import json
 from pathlib import Path
 
@@ -33,10 +32,7 @@ def _require(cfg: dict, key: str, section: str):
 
 
 def save_predictions_to_root(input_path: Path, tree_name: str, predictions: list, output_path: Path):
-    """
-    Reads the input ROOT file, appends the predicted labels as a new branch named 'out',
-    and saves the result to a new ROOT file.
-    """
+    """Append predictions as branch 'out' and write to a new ROOT file."""
     print(f"Opening input ROOT file: {input_path}")
     
     with uproot.open(input_path) as infile:
@@ -129,6 +125,8 @@ def evaluate(config, base_dir):
         random_state=seed,
         shuffle=False, 
     )
+    # Use augmented feature set (base + physics features added in load_data)
+    features = [c for c in data_df.columns if c != label_column]
 
     # 4. Load Scaler
     scaler_raw = get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
@@ -263,8 +261,7 @@ def evaluate(config, base_dir):
     if not root_output_raw:
         raise ValueError("Config must set 'test.output_file'.")
 
-    # [FIX] Explicitly construct the output path relative to E90ML/data/output
-    # This overrides potential misconfiguration in DEFAULT_OUTPUT_DIR
+    # Always anchor output under project_root/data/output
     default_output_dir = project_root / "data" / "output"
     root_output_path = resolve_dir(root_output_raw, default_output_dir, project_root)
         

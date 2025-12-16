@@ -3,7 +3,6 @@ import json
 import random
 import gc
 import sys
-import os
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -52,7 +51,7 @@ def _float_range(cfg, key):
 
 def objective_factory(config, base_dir):
     """
-    CPU Optimized: Pre-process data ONCE outside the trial loop to save time and memory.
+    Pre-process data once outside the trial loop to save CPU and memory.
     """
     data_cfg = config.get("data", {})
     tuning_cfg = config.get("tuning", {})
@@ -87,15 +86,15 @@ def objective_factory(config, base_dir):
         random_state=seed,
     )
 
-    # --- Memory Optimization Block ---
-    print("Processing data (Split & Scale)...")
+    # Memory: keep only encoded arrays in scope
+    features = [c for c in dataset_df.columns if c != label_column]
     feature_matrix = dataset_df[features].values.astype(np.float32)
     labels = dataset_df[label_column].values.astype(np.int64)
     
     del dataset_df
     gc.collect()
 
-    # 1. Stratified Split (ONCE)
+    # Stratified split once up front
     train_features, val_features, train_labels, val_labels = train_test_split(
         feature_matrix,
         labels,
@@ -107,12 +106,12 @@ def objective_factory(config, base_dir):
     del feature_matrix, labels
     gc.collect()
 
-    # 2. Fit Scaler (ONCE)
+    # Fit scaler once
     scaler = StandardScaler()
     train_features = scaler.fit_transform(train_features)
     val_features = scaler.transform(val_features)
 
-    # 3. Create Tensor Datasets (ONCE)
+    # Create Tensor datasets once
     train_dataset = E90Dataset(train_features, train_labels)
     val_dataset = E90Dataset(val_features, val_labels)
 

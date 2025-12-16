@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
-
+import itertools
 import numpy as np
 import pandas as pd
 import torch
@@ -174,6 +174,41 @@ def _resolve_seed(local_seed, global_seed):
     return int(seed)
 
 
+def calculate_physics_features(df: pd.DataFrame, feature_cols: list) -> Tuple[pd.DataFrame, list]:
+    """
+    Add opening-angle features (cos theta) assuming ux, uy, uz are already unit vectors.
+    Expects feature_cols ordered as [t0_ux, t0_uy, t0_uz, t0_dedx, t1_ux, ...].
+    """
+    vars_per_track = 4  # ux, uy, uz, dedx
+    track_vectors = []
+    for idx in range(0, len(feature_cols), vars_per_track):
+        u_cols = feature_cols[idx : idx + 3]
+        if len(u_cols) < 3:
+            break
+        track_vectors.append((idx // vars_per_track, u_cols))
+
+    if len(track_vectors) < 2:
+        print("Warning: Not enough track vectors to calc angles. Skipping.")
+        return df, feature_cols
+
+    new_features = []
+    for (i, u_cols_i), (j, u_cols_j) in itertools.combinations(track_vectors, 2):
+        # Unit vectors => dot product equals cos theta
+        dot_product = (
+            df[u_cols_i[0]] * df[u_cols_j[0]]
+            + df[u_cols_i[1]] * df[u_cols_j[1]]
+            + df[u_cols_i[2]] * df[u_cols_j[2]]
+        )
+        col_name = f"ang_cos_t{i+1}t{j+1}"
+        # Clip to [-1, 1] to limit float drift
+        df[col_name] = dot_product.clip(-1.0, 1.0)
+        new_features.append(col_name)
+
+    if new_features:
+        print(f"Added physics features: {new_features}")
+    return df, feature_cols + new_features
+
+
 def load_data(
     files: list,
     tree_name: str,
@@ -205,6 +240,8 @@ def load_data(
 
 
     data = pd.concat(dfs, ignore_index=True)
+
+    data, _ = calculate_physics_features(data, features)
 
     if shuffle:
         if fraction < 1.0:
@@ -244,7 +281,7 @@ class E90Dataset(TorchDataset):
     """
     def __init__(self, X: np.ndarray, y: np.ndarray):
         self.X = X.astype(np.float32)
-        self.y = y.astype(np.long)
+        self.y = y.astype(np.int64)
 
     def __len__(self):
         return len(self.y)

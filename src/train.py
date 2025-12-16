@@ -115,7 +115,9 @@ def train_final(config, base_dir):
         random_state=seed,
     )
 
-    # --- Memory Optimization ---
+    features = [c for c in full_df.columns if c != label_column]
+
+    # Memory: drop the raw frame after extracting arrays
     print("Processing data...")
     feature_matrix = full_df[features].values.astype(np.float32)
     labels = full_df[label_column].values.astype(np.int64)
@@ -150,8 +152,6 @@ def train_final(config, base_dir):
     # Datasets & Loaders
     train_dataset = E90Dataset(train_features, train_labels)
     val_dataset = E90Dataset(val_features, val_labels)
-    train_label_counts = np.bincount(train_dataset.y, minlength=2) if num_classes == 2 else None
-    
     del train_features, val_features, train_labels, val_labels
     gc.collect()
 
