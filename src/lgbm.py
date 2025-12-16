@@ -12,6 +12,7 @@ from common import (
     apply_plot_style,
     load_config,
     load_data,
+    get_augmented_feature_columns,
     resolve_data_files,
     resolve_dir,
     _resolve_seed,
@@ -66,7 +67,7 @@ def train_lgbm(config, base_dir):
 
     files = resolve_data_files(data_cfg, base_dir)
     print("Loading data...")
-    df, num_classes = load_data(
+    feature_matrix, labels, num_classes = load_data(
         files=files,
         tree_name=_require(data_cfg, "tree_name", "data"),
         features=_require(data_cfg, "feature_columns", "data"),
@@ -76,12 +77,11 @@ def train_lgbm(config, base_dir):
         random_state=seed,
     )
 
-    label_column = data_cfg["label_column"]
-    features = [c for c in df.columns if c != label_column]
+    features = get_augmented_feature_columns(data_cfg["feature_columns"])
     print(f"Features used ({len(features)}): {features}")
 
-    X = df[features]
-    y = df[label_column]
+    X = feature_matrix
+    y = labels
 
     X_train, X_val, y_train, y_val = train_test_split(
         X,
@@ -107,6 +107,7 @@ def train_lgbm(config, base_dir):
         y_train,
         eval_set=[(X_val, y_val)],
         eval_names=["validation"],
+        feature_name=features,
         callbacks=callbacks,
     )
 

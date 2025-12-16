@@ -15,6 +15,7 @@ from common import (
     create_model_from_params,
     apply_plot_style,
     DEFAULT_LABEL_MAPPING,
+    get_augmented_feature_columns,
 )
 
 # -----------------------------------------------------------------------------
@@ -84,7 +85,7 @@ def run_explanation():
     label_mapping = LABEL_MAPPING
 
     # Load a fraction of data. SHAP is computationally expensive.
-    df, num_classes = load_data(
+    feature_matrix, _, num_classes = load_data(
         files=files,
         tree_name=tree_name,
         features=FEATURE_COLUMNS,
@@ -93,11 +94,10 @@ def run_explanation():
         fraction=float(SAMPLE_FRACTION),
         random_state=SEED,
     )
-    features = [c for c in df.columns if c != label_column]
+    features = get_augmented_feature_columns(FEATURE_COLUMNS)
     print(f"Features list ({len(features)}): {features}")
     
-    X_raw = df[features].values.astype(np.float32)
-    del df  # Free memory
+    X_raw = feature_matrix.astype(np.float32, copy=False)
 
     # -------------------------------------------------------------------------
     # 3. Load Scaler & Preprocess

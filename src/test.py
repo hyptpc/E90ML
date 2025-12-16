@@ -16,6 +16,7 @@ from common import (
     get_config_value,
     _resolve_seed,
     create_model_from_params,
+    get_augmented_feature_columns,
     load_config,
     resolve_device,
     resolve_dir,
@@ -115,7 +116,7 @@ def evaluate(config, base_dir):
     fraction = float(_require(test_cfg, "fraction", "test"))
     
     print("Loading data...")
-    data_df, num_classes = load_data(
+    feature_matrix, labels, num_classes = load_data(
         files=files,
         tree_name=tree_name,
         features=features,
@@ -126,7 +127,7 @@ def evaluate(config, base_dir):
         shuffle=False, 
     )
     # Use augmented feature set (base + physics features added in load_data)
-    features = [c for c in data_df.columns if c != label_column]
+    features = get_augmented_feature_columns(features)
 
     # 4. Load Scaler
     scaler_raw = get_config_value(training_cfg, "scaler_output_file", "scaler_output_path")
@@ -146,8 +147,8 @@ def evaluate(config, base_dir):
         scaler = pickle.load(f)
 
     # Transform features
-    feature_matrix = scaler.transform(data_df[features].values)
-    labels = data_df[label_column].values
+    feature_matrix = scaler.transform(feature_matrix)
+    labels = labels.astype(np.int64)
 
     # Create Dataset
     dataset = E90Dataset(feature_matrix, labels)

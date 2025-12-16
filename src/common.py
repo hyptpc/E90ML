@@ -200,13 +200,32 @@ def calculate_physics_features(df: pd.DataFrame, feature_cols: list) -> Tuple[pd
             + df[u_cols_i[2]] * df[u_cols_j[2]]
         )
         col_name = f"ang_cos_t{i+1}t{j+1}"
-        # Clip to [-1, 1] to limit float drift
-        df[col_name] = dot_product.clip(-1.0, 1.0)
+        # Clip to [-1, 1] and cast to float32 immediately to save memory
+        df[col_name] = dot_product.clip(-1.0, 1.0).astype(np.float32)
         new_features.append(col_name)
 
     if new_features:
         print(f"Added physics features: {new_features}")
     return df, feature_cols + new_features
+
+
+def get_augmented_feature_columns(feature_cols: list) -> list:
+    """Return feature list including physics angle features."""
+    vars_per_track = 4
+    track_vectors = []
+    for idx in range(0, len(feature_cols), vars_per_track):
+        u_cols = feature_cols[idx : idx + 3]
+        if len(u_cols) < 3:
+            break
+        track_vectors.append((idx // vars_per_track, u_cols))
+
+    if len(track_vectors) < 2:
+        return list(feature_cols)
+
+    new_features = []
+    for (i, _), (j, _) in itertools.combinations(track_vectors, 2):
+        new_features.append(f"ang_cos_t{i+1}t{j+1}")
+    return list(feature_cols) + new_features
 
 
 def load_data(
@@ -218,60 +237,92 @@ def load_data(
     fraction: float,
     random_state: Optional[int],
     shuffle: bool = True,
-) -> Tuple[pd.DataFrame, int]:
+) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Load ROOT files into a single DataFrame, optionally downsample, and remap labels.
-    Returns a tuple of (dataframe, num_classes).
+    Load ROOT files iteratively to save memory.
+    Returns (X, y, num_classes) as numpy arrays, not a DataFrame.
     """
-    feature_cols = features
-    dfs = []
+    feature_cols = list(features)
+    X_list = []
+    y_list = []
+    unique_labels = set()
+    final_feature_cols: list = []
 
-    for fpath in files:
-        with uproot.open(fpath) as file:
-            df = file[tree_name].arrays(library="pd")
-            if label_column not in df.columns:
-                raise ValueError(f"Label column '{label_column}' not found in {fpath}.")
+    for idx_file, fpath in enumerate(files):
+        print(f"Loading file {idx_file + 1}/{len(files)}: {Path(fpath).name} ...")
+        try:
+            with uproot.open(fpath) as file:
+                df = file[tree_name].arrays(feature_cols + [label_column], library="pd")
+        except Exception as exc:
+            print(f"Skipping {fpath} due to error: {exc}")
+            continue
 
-            missing = [col for col in feature_cols if col not in df.columns]
-            if missing:
-                raise ValueError(f"Missing feature columns in {fpath}: {missing}")
+        if label_column not in df.columns:
+            raise ValueError(f"Label column '{label_column}' not found in {fpath}.")
 
-            dfs.append(df[feature_cols + [label_column]])
+        missing = [col for col in feature_cols if col not in df.columns]
+        if missing:
+            raise ValueError(f"Missing feature columns in {fpath}: {missing}")
 
+        df, current_cols = calculate_physics_features(df, feature_cols)
+        if not final_feature_cols:
+            final_feature_cols = current_cols
 
-    data = pd.concat(dfs, ignore_index=True)
+        X_part = df[final_feature_cols].values.astype(np.float32)
+        y_part = df[label_column].values.astype(np.int64)
+        del df
 
-    data, _ = calculate_physics_features(data, features)
+        if fraction < 1.0:
+            n_samples = len(y_part)
+            n_keep = max(1, int(n_samples * fraction))
+            if shuffle and random_state is not None:
+                rng = np.random.default_rng(random_state + idx_file)
+                indices = rng.choice(n_samples, n_keep, replace=False)
+                X_part = X_part[indices]
+                y_part = y_part[indices]
+            else:
+                X_part = X_part[:n_keep]
+                y_part = y_part[:n_keep]
+
+        X_list.append(X_part)
+        y_list.append(y_part)
+        unique_labels.update(np.unique(y_part))
+        gc.collect()
+
+    if not X_list:
+        raise ValueError("No data loaded.")
+
+    print("Concatenating arrays...")
+    X = np.concatenate(X_list, axis=0)
+    y = np.concatenate(y_list, axis=0)
+    del X_list, y_list
+    gc.collect()
 
     if shuffle:
-        if fraction < 1.0:
-            data = data.sample(frac=fraction, random_state=random_state).reset_index(drop=True)
-        else:
-            data = data.sample(frac=1.0, random_state=random_state).reset_index(drop=True)
-    else:
-        if fraction < 1.0:
-            n_keep = max(1, int(len(data) * fraction))
-            data = data.iloc[:n_keep].reset_index(drop=True)
-        else:
-            data = data.reset_index(drop=True)
+        print("Shuffling final dataset...")
+        rng = np.random.default_rng(random_state) if random_state is not None else np.random.default_rng()
+        indices = rng.permutation(len(y))
+        X = X[indices]
+        y = y[indices]
 
     if label_mapping:
         sig_labels = set(label_mapping.get("signal_labels", []))
         bg_labels = set(label_mapping.get("background_labels", []))
 
-        def map_label(x):
-            if x in sig_labels:
-                return 1
-            if x in bg_labels:
-                return 0
-            raise ValueError(f"Label {x} not in signal_labels or background_labels.")
-
-        data[label_column] = data[label_column].apply(map_label)
+        new_y = np.full_like(y, -1)
+        mask_sig = np.isin(y, list(sig_labels))
+        mask_bg = np.isin(y, list(bg_labels))
+        new_y[mask_sig] = 1
+        new_y[mask_bg] = 0
+        if np.any(new_y == -1):
+            raise ValueError("Found labels not in signal_labels or background_labels.")
+        y = new_y
         num_classes = 2
     else:
-        num_classes = int(np.unique(data[label_column]).size)
+        num_classes = len(unique_labels)
 
-    return data, num_classes
+    print(f"Data loaded: Shape {X.shape}, Mem usage approx {X.nbytes / 1024**2:.1f} MB")
+    return X, y, num_classes
 
 
 class E90Dataset(TorchDataset):

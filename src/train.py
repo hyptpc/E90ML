@@ -24,6 +24,7 @@ from common import (
     get_config_value,
     apply_plot_style,
     create_model_from_params,
+    get_augmented_feature_columns,
     load_config,
     resolve_data_files,
     resolve_device,
@@ -105,7 +106,7 @@ def train_final(config, base_dir):
 
     # Load Data (Full)
     print("Loading data...")
-    full_df, num_classes = load_data(
+    feature_matrix, labels, num_classes = load_data(
         files=files,
         tree_name=tree_name,
         features=features,
@@ -114,15 +115,7 @@ def train_final(config, base_dir):
         fraction=train_fraction,
         random_state=seed,
     )
-
-    features = [c for c in full_df.columns if c != label_column]
-
-    # Memory: drop the raw frame after extracting arrays
-    print("Processing data...")
-    feature_matrix = full_df[features].values.astype(np.float32)
-    labels = full_df[label_column].values.astype(np.int64)
-    del full_df
-    gc.collect()
+    features = get_augmented_feature_columns(features)
 
     train_features, val_features, train_labels, val_labels = train_test_split(
         feature_matrix,
@@ -190,6 +183,10 @@ def train_final(config, base_dir):
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    train_label_counts = None
+    if num_classes == 2:
+        train_label_counts = np.bincount(train_dataset.y, minlength=2)
 
     device = resolve_device(config.get("device"))
     model = create_model_from_params(model_params, input_dim=len(features), num_classes=num_classes).to(device)

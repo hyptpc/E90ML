@@ -30,6 +30,7 @@ from common import (
     get_config_value,
     apply_plot_style,
     create_model_from_params,
+    get_augmented_feature_columns,
     load_config,
     resolve_data_files,
     resolve_device,
@@ -77,7 +78,7 @@ def objective_factory(config, base_dir):
     val_split = float(tuning_cfg["val_split"])
 
     print("Loading data...")
-    dataset_df, num_classes = load_data(
+    feature_matrix, labels, num_classes = load_data(
         files=files,
         tree_name=tree_name,
         features=features,
@@ -88,11 +89,7 @@ def objective_factory(config, base_dir):
     )
 
     # Memory: keep only encoded arrays in scope
-    features = [c for c in dataset_df.columns if c != label_column]
-    feature_matrix = dataset_df[features].values.astype(np.float32)
-    labels = dataset_df[label_column].values.astype(np.int64)
-    
-    del dataset_df
+    features = get_augmented_feature_columns(features)
     gc.collect()
 
     # Stratified split once up front
