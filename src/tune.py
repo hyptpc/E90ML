@@ -3,7 +3,7 @@ import json
 import random
 import gc
 import sys
-import os
+from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -229,24 +229,27 @@ def run_tuning(config, base_dir):
     tuning_cfg = config.get("tuning", {})
     direction = tuning_cfg["direction"]
     target_trials = int(tuning_cfg["n_trials"])
-    
+
     best_params_raw = get_config_value(tuning_cfg, "tune_params_file", "best_params_file", "best_params_path")
     best_params_path = resolve_dir(best_params_raw, TUNE_DIR, base_dir)
 
     trials_raw = get_config_value(tuning_cfg, "study_summary_file", "study_summary_path")
     trials_path = resolve_dir(trials_raw, OUTPUT_DIR, base_dir) if trials_raw else None
-    
+
+    project_root = Path(__file__).resolve().parent.parent
     plots_cfg = tuning_cfg.get("plots", {})
-    plots_dir = OUTPUT_DIR
+    default_plots_dir = project_root / "plots" / "tuning_result"
+    plots_dir_raw = plots_cfg.get("base_dir", default_plots_dir)
+    plots_dir = resolve_dir(str(plots_dir_raw), default_plots_dir, project_root)
     plot_paths = {
         "optimization_history": resolve_dir(
-            plots_cfg.get("optimization_history_file", "optimization_history.png"), plots_dir, base_dir
+            plots_cfg.get("optimization_history_file", "optimization_history.png"), plots_dir, project_root
         ),
         "param_importances": resolve_dir(
-            plots_cfg.get("param_importances_file", "param_importances.png"), plots_dir, base_dir
+            plots_cfg.get("param_importances_file", "param_importances.png"), plots_dir, project_root
         ),
         "param_slice": resolve_dir(
-            plots_cfg.get("param_slice_file", "param_slice.png"), plots_dir, base_dir
+            plots_cfg.get("param_slice_file", "param_slice.png"), plots_dir, project_root
         ),
     }
     
