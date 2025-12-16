@@ -277,62 +277,104 @@ def load_data(
 
 # --- GNN Classes ---
 
+# class E90GraphDataset(PyGDataset):
+#     """
+#     Dataset that converts a Pandas DataFrame into a PyG graph format.
+#     Each event becomes a fully connected 3-node graph (t0=ScatPi, t1, t2).
+#     """
+#     def __init__(self, df: pd.DataFrame, feature_cols_dict: dict, label_col: str):
+#         super().__init__()
+#         self.data_list = []
+#         self._process_dataframe(df, feature_cols_dict, label_col)
+
+#     def _process_dataframe(self, df, cols, label_col):
+#         # Edge index for a fully connected 3-node graph
+#         # Node IDs: 0=t0, 1=t1, 2=t2
+#         edge_index = torch.tensor([
+#             [0, 0, 1, 1, 2, 2],
+#             [1, 2, 0, 2, 0, 1]
+#         ], dtype=torch.long)
+
+#         # Pre-extract as NumPy arrays for speed
+#         t0_ux = df[cols['t0'][0]].values
+#         t0_uy = df[cols['t0'][1]].values
+#         t0_uz = df[cols['t0'][2]].values
+#         t0_dedx = df[cols['t0'][3]].values
+        
+#         t1_ux = df[cols['t1'][0]].values
+#         t1_uy = df[cols['t1'][1]].values
+#         t1_uz = df[cols['t1'][2]].values
+#         t1_dedx = df[cols['t1'][3]].values
+        
+#         t2_ux = df[cols['t2'][0]].values
+#         t2_uy = df[cols['t2'][1]].values
+#         t2_uz = df[cols['t2'][2]].values
+#         t2_dedx = df[cols['t2'][3]].values
+        
+#         labels = df[label_col].values
+
+#         for i in range(len(df)):
+#             # Node features: [ux, uy, uz, dedx, is_scat_pi]
+#             # t0 (Scat Pi): is_scat_pi = 1
+#             node_t0 = [t0_ux[i], t0_uy[i], t0_uz[i], t0_dedx[i], 1.0]
+#             # t1 (Track): is_scat_pi = 0
+#             node_t1 = [t1_ux[i], t1_uy[i], t1_uz[i], t1_dedx[i], 0.0]
+#             # t2 (Track): is_scat_pi = 0
+#             node_t2 = [t2_ux[i], t2_uy[i], t2_uz[i], t2_dedx[i], 0.0]
+
+#             x = torch.tensor([node_t0, node_t1, node_t2], dtype=torch.float)
+#             y = torch.tensor([int(labels[i])], dtype=torch.long)
+
+#             data = Data(x=x, edge_index=edge_index, y=y)
+#             self.data_list.append(data)
+
+#     def len(self):
+#         return len(self.data_list)
+
+#     def get(self, idx):
+#         return self.data_list[idx]
+
 class E90GraphDataset(PyGDataset):
-    """
-    Dataset that converts a Pandas DataFrame into a PyG graph format.
-    Each event becomes a fully connected 3-node graph (t0=ScatPi, t1, t2).
-    """
+    """Memory-optimized dataset that slices tensors on demand instead of storing a list."""
     def __init__(self, df: pd.DataFrame, feature_cols_dict: dict, label_col: str):
         super().__init__()
-        self.data_list = []
-        self._process_dataframe(df, feature_cols_dict, label_col)
-
-    def _process_dataframe(self, df, cols, label_col):
-        # Edge index for a fully connected 3-node graph
-        # Node IDs: 0=t0, 1=t1, 2=t2
-        edge_index = torch.tensor([
+        
+        num_events = len(df)
+        
+        # Shared edge index for a fully connected 3-node graph
+        self.common_edge_index = torch.tensor([
             [0, 0, 1, 1, 2, 2],
             [1, 2, 0, 2, 0, 1]
         ], dtype=torch.long)
 
-        # Pre-extract as NumPy arrays for speed
-        t0_ux = df[cols['t0'][0]].values
-        t0_uy = df[cols['t0'][1]].values
-        t0_uz = df[cols['t0'][2]].values
-        t0_dedx = df[cols['t0'][3]].values
-        
-        t1_ux = df[cols['t1'][0]].values
-        t1_uy = df[cols['t1'][1]].values
-        t1_uz = df[cols['t1'][2]].values
-        t1_dedx = df[cols['t1'][3]].values
-        
-        t2_ux = df[cols['t2'][0]].values
-        t2_uy = df[cols['t2'][1]].values
-        t2_uz = df[cols['t2'][2]].values
-        t2_dedx = df[cols['t2'][3]].values
-        
-        labels = df[label_col].values
+        self.labels = torch.tensor(df[label_col].values, dtype=torch.long)
 
-        for i in range(len(df)):
-            # Node features: [ux, uy, uz, dedx, is_scat_pi]
-            # t0 (Scat Pi): is_scat_pi = 1
-            node_t0 = [t0_ux[i], t0_uy[i], t0_uz[i], t0_dedx[i], 1.0]
-            # t1 (Track): is_scat_pi = 0
-            node_t1 = [t1_ux[i], t1_uy[i], t1_uz[i], t1_dedx[i], 0.0]
-            # t2 (Track): is_scat_pi = 0
-            node_t2 = [t2_ux[i], t2_uy[i], t2_uz[i], t2_dedx[i], 0.0]
+        # Node features stacked as [N, 3, 5] with order [ux, uy, uz, dedx, is_scat]
+        t0_feats = df[feature_cols_dict['t0']].values.astype(np.float32)  # [N, 4]
+        t1_feats = df[feature_cols_dict['t1']].values.astype(np.float32)  # [N, 4]
+        t2_feats = df[feature_cols_dict['t2']].values.astype(np.float32)  # [N, 4]
 
-            x = torch.tensor([node_t0, node_t1, node_t2], dtype=torch.float)
-            y = torch.tensor([int(labels[i])], dtype=torch.long)
+        # is_scat flag: t0 -> 1.0, t1/t2 -> 0.0
+        ones = np.ones((num_events, 1), dtype=np.float32)
+        zeros = np.zeros((num_events, 1), dtype=np.float32)
 
-            data = Data(x=x, edge_index=edge_index, y=y)
-            self.data_list.append(data)
+        t0_node = np.hstack([t0_feats, ones])  # [N, 5]
+        t1_node = np.hstack([t1_feats, zeros]) # [N, 5]
+        t2_node = np.hstack([t2_feats, zeros]) # [N, 5]
+
+        self.x_tensor = torch.from_numpy(
+            np.stack([t0_node, t1_node, t2_node], axis=1)
+        )
 
     def len(self):
-        return len(self.data_list)
+        return len(self.labels)
 
     def get(self, idx):
-        return self.data_list[idx]
+        return Data(
+            x=self.x_tensor[idx], 
+            edge_index=self.common_edge_index, 
+            y=self.labels[idx].unsqueeze(0)
+        )
 
 
 class E90GNN(nn.Module):

@@ -155,36 +155,28 @@ def save_optuna_plots(study, plots_dir: Path, filenames: dict):
         except Exception as exc:
             print(f"Skipping tight_layout due to: {exc}")
 
-    def _save_fig(obj, path: Path):
-        target = obj
-        if hasattr(obj, "savefig"):
-            target = obj
-        elif hasattr(obj, "figure") and hasattr(obj.figure, "savefig"):
-            target = obj.figure
-        else:
-            print(f"Skipping save for {path} (object has no savefig).")
-            return
-        target.savefig(path)
-
     try:
         # 1. Optimization History
-        fig = ovm.plot_optimization_history(study)
+        ovm.plot_optimization_history(study)
+        fig = plt.gcf()
         _tight_layout_safe(fig)
-        _save_fig(fig, plots_dir / filenames.get("optimization_history", "opt_history.png"))
-        plt.close() # Free memory
+        fig.savefig(plots_dir / filenames.get("optimization_history", "opt_history.png"))
+        plt.close(fig)
 
         # 2. Slice plot (relationship between each parameter and objective)
-        fig = ovm.plot_slice(study)
+        ovm.plot_slice(study)
+        fig = plt.gcf()
         _tight_layout_safe(fig)
-        _save_fig(fig, plots_dir / filenames.get("slice", "opt_slice.png"))
-        plt.close()
+        fig.savefig(plots_dir / filenames.get("slice", "opt_slice.png"))
+        plt.close(fig)
 
         # 3. Param Importances
         try:
-            fig = ovm.plot_param_importances(study)
+            ovm.plot_param_importances(study)
+            fig = plt.gcf()
             _tight_layout_safe(fig)
-            _save_fig(fig, plots_dir / filenames.get("param_importances", "opt_importances.png"))
-            plt.close()
+            fig.savefig(plots_dir / filenames.get("param_importances", "opt_importances.png"))
+            plt.close(fig)
         except Exception as e:
             print(f"Skipping param_importances plot (needs more than 1 param): {e}")
 
