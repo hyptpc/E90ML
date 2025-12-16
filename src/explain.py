@@ -55,8 +55,8 @@ MODEL_PATH = PROJECT_ROOT / "param" / "pth" / "example.pth"
 BEST_PARAMS_PATH = PROJECT_ROOT / "param" / "tune" / "tuned_params.json"
 
 # Output paths
-PLOT_SUMMARY_PATH = PROJECT_ROOT / "data" / "output" / "shap_summary.png"
-PLOT_BAR_PATH = PROJECT_ROOT / "data" / "output" / "shap_importance_bar.png"
+PLOT_SUMMARY_PATH = PROJECT_ROOT / "plots" / "explain" / "shap_summary.png"
+PLOT_BAR_PATH = PROJECT_ROOT / "plots" / "explain" / "shap_importance_bar.png"
 
 # SHAP sampling sizes
 BACKGROUND_SAMPLES = 200
