@@ -154,6 +154,18 @@ def save_optuna_plots(study, plots_dir: Path, filenames: dict):
                 obj.figure.tight_layout()
         except Exception as exc:
             print(f"Skipping tight_layout due to: {exc}")
+    
+    def _adjust_slice_colorbar(fig):
+        try:
+            # Move colorbar (assumed last axis) to the right
+            if len(fig.axes) < 2:
+                return
+            cbar_ax = fig.axes[-1]
+            pos = cbar_ax.get_position()
+            fig.subplots_adjust(right=0.9, wspace=0.35)
+            cbar_ax.set_position([0.92, pos.y0, pos.width * 0.5, pos.height])
+        except Exception as exc:
+            print(f"Skipping colorbar adjustment due to: {exc}")
 
     try:
         # 1. Optimization History
@@ -167,6 +179,7 @@ def save_optuna_plots(study, plots_dir: Path, filenames: dict):
         ovm.plot_slice(study)
         fig = plt.gcf()
         _tight_layout_safe(fig)
+        _adjust_slice_colorbar(fig)
         fig.savefig(plots_dir / filenames.get("slice", "opt_slice.png"))
         plt.close(fig)
 
@@ -208,8 +221,7 @@ def run_tuning(config, base_dir):
     plots_cfg = tuning_cfg.get("plots", {})
     plots_dir_raw = plots_cfg.get("save_dir", "plots")
     project_root = base_dir.parents[1] if len(base_dir.parents) > 1 else base_dir
-    default_plots_dir = (project_root / "plots").resolve()
-    plots_dir = (default_plots_dir / Path(plots_dir_raw)).resolve()
+    plots_dir = (project_root / Path(plots_dir_raw)).resolve()
     plot_filenames = {
         "optimization_history": plots_cfg.get("optimization_history", "opt_history.png"),
         "slice": plots_cfg.get("slice", "opt_slice.png"),

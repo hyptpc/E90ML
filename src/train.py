@@ -313,9 +313,8 @@ def train_final(config, base_dir):
         training_cfg, "plot_output_file", "plot_output_path", "plots_path", "plots_dir"
     )
     project_root = base_dir.parents[1] if len(base_dir.parents) > 1 else base_dir
-    base_plots_dir = (project_root / "plots").resolve()
     plots_dir_raw = plots_cfg.get("save_dir", "plots")
-    default_plots_dir = (base_plots_dir / Path(plots_dir_raw)).resolve()
+    default_plots_dir = (project_root / Path(plots_dir_raw)).resolve()
 
     if plot_output_raw:
         plot_output_path = (default_plots_dir / Path(plot_output_raw)).resolve()
