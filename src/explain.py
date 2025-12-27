@@ -125,7 +125,7 @@ def run_explanation():
     )
     
     print("Loading model weights...")
-    state = torch.load(MODEL_PATH, map_location=device)
+    state = torch.load(MODEL_PATH, map_location=device, weights_only=True)
     if isinstance(state, dict):
         if "best_model_state_dict" in state:
             state = state["best_model_state_dict"]

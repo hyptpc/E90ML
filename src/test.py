@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 import uproot
 from torch.utils.data import DataLoader
+from sklearn.metrics import auc, roc_curve
 
 from common import (
     E90Dataset,
@@ -17,6 +18,7 @@ from common import (
     get_config_value,
     _resolve_seed,
     create_model_from_params,
+    apply_plot_style,
     load_config,
     resolve_device,
     resolve_dir,
@@ -63,6 +65,30 @@ def save_predictions_to_root(input_path: Path, tree_name: str, predictions: list
     print(f"Writing output to: {output_path}")
     with uproot.recreate(output_path) as outfile:
         outfile[tree_name] = branch_dict
+
+
+def _plot_roc_curve(y_true: list, y_score: list, out_path: Path):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    apply_plot_style()
+
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    roc_auc = auc(fpr, tpr)
+
+    fig = plt.figure(figsize=(6, 6))
+    plt.plot(fpr, tpr, color="tab:blue", label=f"AUC = {roc_auc:.3f}")
+    plt.plot([0.0, 1.0], [0.0, 1.0], color="gray", linestyle="--", linewidth=1)
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve")
+    plt.legend(loc="lower right")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    plt.savefig(out_path)
+    plt.close(fig)
 
 
 def evaluate(config, base_dir):
@@ -179,6 +205,7 @@ def evaluate(config, base_dir):
     
     batch_size = int(_require(test_cfg, "batch_size", "test"))
     num_workers = int(_require(test_cfg, "num_workers", "test"))
+    threshold = float(test_cfg.get("threshold", 0.5))
 
     # 6. Load Trained Model Weights
     model_output_raw = get_config_value(training_cfg, "model_output_file", "model_output_path")
@@ -197,7 +224,7 @@ def evaluate(config, base_dir):
     
     model = create_model_from_params(model_params, input_dim=len(features), num_classes=num_classes).to(device)
 
-    state_dict = torch.load(model_output_path, map_location=device)
+    state_dict = torch.load(model_output_path, map_location=device, weights_only=True)
     if isinstance(state_dict, dict) and "model_state_dict" in state_dict:
         state_dict = state_dict["model_state_dict"]
     
@@ -211,6 +238,7 @@ def evaluate(config, base_dir):
     correct = 0
     ordered_preds = [] 
     ordered_labels = []
+    ordered_scores = []
 
     print("Starting inference...")
     with torch.no_grad():
@@ -223,8 +251,9 @@ def evaluate(config, base_dir):
             if num_classes == 2:
                 logits = outputs.view(-1)
                 probs = torch.sigmoid(logits).cpu()
-                preds = (probs > 0.5).long()
+                preds = (probs > threshold).long()
                 ordered_preds.extend(preds.cpu().numpy().tolist())
+                ordered_scores.extend(probs.numpy().tolist())
             else:
                 probs = torch.softmax(outputs, dim=1).cpu()
                 preds = torch.argmax(probs, dim=1)
@@ -236,6 +265,20 @@ def evaluate(config, base_dir):
 
     accuracy = correct / total if total > 0 else 0.0
     print(f"Inference complete. Accuracy: {accuracy:.4f}")
+
+    if num_classes == 2:
+        if len(set(ordered_labels)) < 2:
+            print("Skipping ROC curve: only one class present in labels.")
+        else:
+            roc_output_raw = get_config_value(test_cfg, "roc_output_file", "roc_output_path")
+            if not roc_output_raw:
+                roc_output_raw = "roc_curve.png"
+            default_plot_dir = project_root / "plots" / "test"
+            roc_output_path = resolve_dir(roc_output_raw, default_plot_dir, project_root)
+            _plot_roc_curve(ordered_labels, ordered_scores, roc_output_path)
+            print(f"Saved ROC curve to '{roc_output_path}'.")
+    else:
+        print("Skipping ROC curve: num_classes != 2.")
 
     # Event-level summary
     positive_label = 1  # signal is mapped to 1 by load_data when label_mapping is provided

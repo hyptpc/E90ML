@@ -238,7 +238,7 @@ def run_tuning(config, base_dir):
 
     project_root = Path(__file__).resolve().parent.parent
     plots_cfg = tuning_cfg.get("plots", {})
-    default_plots_dir = project_root / "plots" / "tuning_result"
+    default_plots_dir = project_root / "plots" / "tune"
     plots_dir_raw = plots_cfg.get("base_dir", default_plots_dir)
     plots_dir = resolve_dir(str(plots_dir_raw), default_plots_dir, project_root)
     plot_paths = {

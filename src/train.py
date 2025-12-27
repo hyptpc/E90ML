@@ -217,7 +217,7 @@ def train_final(config, base_dir):
     start_epoch = 0
 
     if checkpoint_path.exists():
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
             model.load_state_dict(checkpoint.get("model_state_dict", model.state_dict()))
             if "optimizer_state_dict" in checkpoint:
@@ -338,7 +338,7 @@ def train_final(config, base_dir):
 
     # Plotting
     project_root = Path(__file__).resolve().parent.parent
-    default_plots_dir = project_root / "plots" / "training_result"
+    default_plots_dir = project_root / "plots" / "train"
     plot_output_raw = get_config_value(
         training_cfg, "plot_output_file", "plot_output_path", "plots_path", "plots_dir"
     ) or (default_plots_dir / "training_curves.png")
