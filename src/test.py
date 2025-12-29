@@ -36,7 +36,7 @@ def _require(cfg: dict, key: str, section: str):
 
 def save_predictions_to_root(input_path: Path, tree_name: str, predictions: list, output_path: Path):
     """
-    Reads the input ROOT file, appends the predicted labels as a new branch named 'out',
+    Reads the input ROOT file, appends the predicted values as a new branch named 'out',
     and saves the result to a new ROOT file.
     """
     print(f"Opening input ROOT file: {input_path}")
@@ -55,7 +55,7 @@ def save_predictions_to_root(input_path: Path, tree_name: str, predictions: list
         )
 
     df = df.copy()
-    df["out"] = pd.Series(predictions, dtype="int32")
+    df["out"] = pd.Series(predictions, dtype="float32")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
@@ -205,7 +205,6 @@ def evaluate(config, base_dir):
     
     batch_size = int(_require(test_cfg, "batch_size", "test"))
     num_workers = int(_require(test_cfg, "num_workers", "test"))
-    threshold = float(test_cfg.get("threshold", 0.5))
 
     # 6. Load Trained Model Weights
     model_output_raw = get_config_value(training_cfg, "model_output_file", "model_output_path")
@@ -251,7 +250,7 @@ def evaluate(config, base_dir):
             if num_classes == 2:
                 logits = outputs.view(-1)
                 probs = torch.sigmoid(logits).cpu()
-                preds = (probs > threshold).long()
+                preds = (probs > 0.5).long()
                 ordered_preds.extend(preds.cpu().numpy().tolist())
                 ordered_scores.extend(probs.numpy().tolist())
             else:
@@ -319,13 +318,14 @@ def evaluate(config, base_dir):
     else:
         input_root_file = Path(str(files))
 
+    output_values = ordered_scores if num_classes == 2 else ordered_preds
     save_predictions_to_root(
         input_path=input_root_file,
         tree_name=tree_name,
-        predictions=ordered_preds,
+        predictions=output_values,
         output_path=root_output_path,
     )
-    print(f"Successfully saved ROOT file with predictions to '{root_output_path}'.")
+    print(f"Successfully saved ROOT file with outputs to '{root_output_path}'.")
 
 
 def parse_args():
