@@ -24,9 +24,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Data
 DATA_FILES = [
-    PROJECT_ROOT / "data" / "input" / "SigmaNCusp_mm.root",
-    PROJECT_ROOT / "data" / "input" / "QFLambda_mm.root",
-    PROJECT_ROOT / "data" / "input" / "QFSigmaZ_mm.root",
+    PROJECT_ROOT / "data" / "input" / "SigmaNCusp.root",
+    PROJECT_ROOT / "data" / "input" / "QFLambda.root",
+    PROJECT_ROOT / "data" / "input" / "QFSigmaZ.root",
 ]
 TREE_NAME = "g4s2s"
 LABEL_COLUMN = "label"
@@ -43,24 +43,34 @@ FEATURE_COLUMNS = [
     "t2_uy",
     "t2_uz",
     "t2_dedx",
-    "mm",
 ]
 LABEL_MAPPING = DEFAULT_LABEL_MAPPING  # remap to binary: signal=1, background=0
 SAMPLE_FRACTION = 0.1  # fraction of data for SHAP (keep small; SHAP is expensive)
 SEED = 42
 
 # Model artifacts
-SCALER_PATH = PROJECT_ROOT / "param" / "pth" / "example.pkl"
-MODEL_PATH = PROJECT_ROOT / "param" / "pth" / "example.pth"
-BEST_PARAMS_PATH = PROJECT_ROOT / "param" / "tune" / "tuned_params.json"
+SCALER_PATH = PROJECT_ROOT / "param" / "pth" / "v1.pkl"
+MODEL_PATH = PROJECT_ROOT / "param" / "pth" / "v1.pth"
+BEST_PARAMS_PATH = PROJECT_ROOT / "param" / "tune" / "v1_tuned_params.json"
 
 # Output paths
-PLOT_SUMMARY_PATH = PROJECT_ROOT / "plots" / "explain" / "shap_summary.png"
-PLOT_BAR_PATH = PROJECT_ROOT / "plots" / "explain" / "shap_importance_bar.png"
+PLOT_SUMMARY_PATH = PROJECT_ROOT / "plots" / "explain" / "v1_shap_summary.png"
+PLOT_BAR_PATH = PROJECT_ROOT / "plots" / "explain" / "v1_shap_importance_bar.png"
+
+# Font settings for this script
+FONT_FAMILY = "serif"
+FONT_SIZE = 20
 
 # SHAP sampling sizes
 BACKGROUND_SAMPLES = 200
 TEST_SAMPLES = 500
+
+
+def _force_plot_fonts(fig) -> None:
+    # SHAP resets some text properties; enforce chosen fonts after plotting.
+    for text in fig.findobj(matplotlib.text.Text):
+        text.set_fontfamily(FONT_FAMILY)
+        text.set_fontsize(FONT_SIZE)
 
 
 def run_explanation():
@@ -178,6 +188,8 @@ def run_explanation():
     
     PLOT_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     apply_plot_style()
+    matplotlib.rcParams["font.family"] = FONT_FAMILY
+    matplotlib.rcParams["font.size"] = FONT_SIZE
 
     # Plot A: Summary Plot (Beeswarm)
     print("Generating summary plot...")
@@ -189,6 +201,8 @@ def run_explanation():
         show=False,
         plot_size=(10, 8) 
     )
+    plt.xlabel("SHAP value")
+    _force_plot_fonts(plt.gcf())
     plt.savefig(PLOT_SUMMARY_PATH, bbox_inches='tight')
     plt.close()
     print(f"Saved: {PLOT_SUMMARY_PATH}")
@@ -204,6 +218,8 @@ def run_explanation():
         show=False,
         plot_size=(10, 8)
     )
+    plt.xlabel("mean(|SHAP value|)")
+    _force_plot_fonts(plt.gcf())
     plt.savefig(PLOT_BAR_PATH, bbox_inches='tight')
     plt.close()
     print(f"Saved: {PLOT_BAR_PATH}")
