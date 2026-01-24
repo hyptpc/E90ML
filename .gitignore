@@ -3,11 +3,15 @@
 *.csv
 *.png
 *.db
+*demo.db
 *.pkl
+!*demo.pkl
 *.pth
+!*demo.pth
 *.yaml
+!*demo.yaml
 *.json
-G4S2S
+!*demo.json
 src/__pycache__
 /ana/
 /data/output/

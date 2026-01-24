@@ -1,0 +1,155 @@
+
+# E90ML user config File
+
+metadata:
+  purpose: "Binary classification (SigmaNCusp vs background)"
+  notes: "Labels: SigmaNCusp=1 (signal), QFLambda=2, QFSigmaZ=3."
+
+# -----------------------------------------------------------------------------
+# [BSUB] - LSF Job Submission Options
+# -----------------------------------------------------------------------------
+# conda_env : Conda environment name used for train/tune/test jobs
+# queue     : LSF queue passed to bsub (e.g., s, l, h)
+# email     : Email address to receive notifications (-u option)
+# -----------------------------------------------------------------------------
+bsub:
+  conda_env: pyml
+  queue: s
+  email: # !YOUR EMAIL ADRESS!
+
+# -----------------------------------------------------------------------------
+# [DATA] - Input Data Settings
+# -----------------------------------------------------------------------------
+# files           : Input ROOT files (looked up under data/input)
+# tree_name       : Name of the TTree in ROOT files
+# label_column    : Column name containing truth labels
+# feature_columns : List of features to use for training
+# fraction        : Fraction of data to load (1.0 = use all data)
+# -----------------------------------------------------------------------------
+data:
+  files:
+    SigmaNCusp: SigmaNCusp.root
+    QFLambda: QFLambda.root
+    QFSigmaZ: QFSigmaZ.root
+  tree_name: g4s2s
+  label_column: label
+  feature_columns:
+    - t0_ux
+    - t0_uy
+    - t0_uz
+    - t0_dedx
+    - t1_ux
+    - t1_uy
+    - t1_uz
+    - t1_dedx
+    - t2_ux
+    - t2_uy
+    - t2_uz
+    - t2_dedx
+  fraction: 1.0
+
+# -----------------------------------------------------------------------------
+# [TUNING] - Hyperparameter Optimization (src/tune.py)
+# -----------------------------------------------------------------------------
+# job_name           : bsub job name (-J option)
+# log_file           : LSF log file path (-o option)
+# seed               : RNG seed for reproducibility (leave blank for random)
+# fraction           : Data fraction for tuning (keep small for speed, e.g., 0.01)
+# val_split          : Validation set split ratio
+# epochs             : Number of epochs per trial
+# n_trials           : Total number of trials
+# num_workers        : DataLoader workers (0 or small value for CPU stability)
+# direction          : Optimization direction (maximize/minimize)
+# search_space       : Hyperparameter ranges to explore
+#   - batch_size     : List of batch sizes
+#   - n_layers       : Min/Max number of layers
+#   - hidden_units   : Min/Max hidden units
+#   - dropout        : Min/Max dropout rate
+#   - lr             : Min/Max learning rate (log scale)
+# -----------------------------------------------------------------------------
+tuning:
+  bsub:
+    job_name: tune
+    log_file: lsflog/tune.log
+  seed: 42
+  fraction: 0.01
+  val_split: 0.2
+  epochs: 10
+  n_trials: 100
+  num_workers: 2
+  direction: maximize
+  search_space:
+    batch_size: [256, 512, 1024]
+    n_layers: {min: 3, max: 8}
+    hidden_units: {min: 256, max: 1024}
+    dropout: {min: 0.1, max: 0.5}
+    lr: {min: 1.0e-4, max: 1.0e-2}
+  study_db_file: demo.db
+  study_name: demo_tune
+  tune_params_file: demo_tune.json
+  study_summary_file: trials_hisory.csv
+  plots:
+    optimization_history_file: tune_history.png
+    param_importances_file: importances.png
+    param_slice_file: slice.png
+
+# -----------------------------------------------------------------------------
+# [TRAINING] - Final Model Training (src/train.py)
+# -----------------------------------------------------------------------------
+# job_name                : bsub job name (-J option)
+# log_file                : LSF log file path (-o option)
+# seed                    : RNG seed for training
+# fraction                : Data fraction (usually 1.0 for final training)
+# val_split               : Validation set split ratio
+# epochs                  : Max epochs
+# patience                : Early stopping patience
+# num_workers             : DataLoader workers
+# checkpoint_file         : Path to save/resume checkpoint
+# model_output_file       : Path to save the final model
+# scaler_output_file      : Path to save the scaler
+# best_params_file        : Path to load tuned parameters from
+# history_output_file     : Path to save per-epoch train/val loss & F1 history (csv)
+# plot_output_file        : Path to save training history plot (png)
+# -----------------------------------------------------------------------------
+training:
+  bsub:
+    job_name: train
+    log_file: lsflog/train.log
+  seed: 90
+  fraction: 1.0
+  val_split: 0.2
+  epochs: 100
+  patience: 10
+  num_workers: 0
+  checkpoint_file: demo.pth
+  model_output_file: demo_out.pth
+  scaler_output_file: demo.pkl
+  best_params_file: demo_tune.json
+  history_output_file: train_history.csv
+  plot_output_file: train_history.png
+
+# -----------------------------------------------------------------------------
+# [TEST] - Inference Settings (src/test.py)
+# -----------------------------------------------------------------------------
+# input_file   : Test ROOT file (looked up under data/input if relative)
+# bsub.*       : Job name/log file used by test.sh when submitting to LSF
+# fraction     : Fraction of test data to evaluate (use 1.0 for full set)
+# batch_size   : DataLoader batch size for inference
+# num_workers  : DataLoader workers
+# output_file     : Output ROOT file with NN output branch ('out')
+# roc_output_file : ROC curve image file name (saved under plots/test if relative)
+test:
+  input_file: test.root
+  bsub:
+    job_name: test
+    log_file: lsflog/test.log
+  fraction: 1.0
+  batch_size: 128
+  num_workers: 0
+  output_file: "test.root"
+  roc_output_file: "roc.png"
+
+# -----------------------------------------------------------------------------
+# [SYSTEM]
+# -----------------------------------------------------------------------------
+device: auto  # 'cuda', 'cpu', or 'auto'
