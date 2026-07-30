@@ -1,10 +1,10 @@
 import argparse
 import pickle
-import sys
 import json
 from pathlib import Path
 
-import pandas as pd
+import awkward as ak
+import numpy as np
 import torch
 import uproot
 from torch.utils.data import DataLoader
@@ -22,7 +22,11 @@ from common import (
     load_config,
     resolve_device,
     resolve_dir,
+    resolve_data_dirs,
     load_data,
+    validate_fraction,
+    summarize_labels,
+    save_data_summary,
 )
 
 
@@ -44,24 +48,21 @@ def save_predictions_to_root(input_path: Path, tree_name: str, predictions: list
     with uproot.open(input_path) as infile:
         if tree_name not in infile:
             raise KeyError(f"Tree '{tree_name}' not found in {input_path}")
-        
-        tree = infile[tree_name]
-        df = tree.arrays(library="pd")
 
-    if len(predictions) != len(df):
+        tree = infile[tree_name]
+        branch_dict = tree.arrays(library="ak", how=dict)
+        num_entries = tree.num_entries
+
+    if len(predictions) != num_entries:
         raise ValueError(
-            f"Prediction length ({len(predictions)}) does not match entries in {input_path} ({len(df)}). "
+            f"Prediction length ({len(predictions)}) does not match entries in {input_path} ({num_entries}). "
             "Ensure 'test.fraction' is set to 1.0."
         )
 
-    df = df.copy()
-    df["out"] = pd.Series(predictions, dtype="float32")
+    branch_dict["out"] = ak.Array(np.asarray(predictions, dtype=np.float32))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Convert DataFrame to a dictionary of numpy arrays to avoid uproot write errors
-    branch_dict = {col: df[col].to_numpy() for col in df.columns}
-    
+
     print(f"Writing output to: {output_path}")
     with uproot.recreate(output_path) as outfile:
         outfile[tree_name] = branch_dict
@@ -105,6 +106,7 @@ def evaluate(config, base_dir):
 
     # 1. Setup Seed
     seed = _resolve_seed(test_cfg.get("seed"), config.get("seed"))
+    data_input_dir, data_output_dir = resolve_data_dirs(base_dir)
 
     # -------------------------------------------------------------------------
     # 2. Resolve Input Files
@@ -112,10 +114,7 @@ def evaluate(config, base_dir):
     # Priority 1: Check if 'input_file' is defined in the [TEST] section
     test_input_raw = _require(test_cfg, "input_file", "test")
 
-    default_input_dir = project_root / "data" / "input"
-    test_file_path = resolve_dir(test_input_raw, default_input_dir, project_root)
-    if not test_file_path.exists():
-        test_file_path = resolve_dir(test_input_raw, default_input_dir, base_dir)
+    test_file_path = resolve_dir(test_input_raw, data_input_dir, base_dir)
 
     if not test_file_path.exists():
         raise FileNotFoundError(f"Test input file not found: {test_file_path}")
@@ -142,7 +141,9 @@ def evaluate(config, base_dir):
         raise ValueError("Config must define tree_name, feature_columns, and label_column under data.")
 
     # 3. Load Data
-    fraction = float(_require(test_cfg, "fraction", "test"))
+    fraction = validate_fraction(_require(test_cfg, "fraction", "test"), "test.fraction")
+    if fraction != 1.0:
+        raise ValueError("test.fraction must be 1.0 when predictions are written back to the full ROOT tree.")
     
     print("Loading data...")
     data_df, num_classes = load_data(
@@ -176,6 +177,18 @@ def evaluate(config, base_dir):
     # Transform features
     feature_matrix = scaler.transform(data_df[features].values)
     labels = data_df[label_column].values
+    data_summary = {
+        "stage": "test",
+        "source_files": [str(path) for path in files],
+        "fraction": fraction,
+        "seed": seed,
+        "data": summarize_labels(labels),
+    }
+    summary_raw = get_config_value(test_cfg, "data_summary_file") or "test_data_summary.json"
+    save_data_summary(
+        data_summary,
+        resolve_dir(summary_raw, data_output_dir, base_dir),
+    )
 
     # Create Dataset
     dataset = E90Dataset(feature_matrix, labels)
@@ -205,6 +218,10 @@ def evaluate(config, base_dir):
     
     batch_size = int(_require(test_cfg, "batch_size", "test"))
     num_workers = int(_require(test_cfg, "num_workers", "test"))
+    if batch_size < 1:
+        raise ValueError("test.batch_size must be at least 1.")
+    if num_workers < 0:
+        raise ValueError("test.num_workers must be non-negative.")
 
     # 6. Load Trained Model Weights
     model_output_raw = get_config_value(training_cfg, "model_output_file", "model_output_path")
@@ -231,7 +248,14 @@ def evaluate(config, base_dir):
     model.eval()
 
     # 7. Run Inference
-    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    data_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
+        persistent_workers=(num_workers > 0),
+    )
 
     total = 0
     correct = 0
@@ -240,10 +264,10 @@ def evaluate(config, base_dir):
     ordered_scores = []
 
     print("Starting inference...")
-    with torch.no_grad():
+    with torch.inference_mode():
         for inputs, labels_batch in data_loader:
-            inputs = inputs.to(device)
-            labels_batch = labels_batch.to(device)
+            inputs = inputs.to(device, non_blocking=True)
+            labels_batch = labels_batch.to(device, non_blocking=True)
 
             outputs = model(inputs)
             
@@ -305,10 +329,9 @@ def evaluate(config, base_dir):
     if not root_output_raw:
         raise ValueError("Config must set 'test.output_file'.")
 
-    # [FIX] Explicitly construct the output path relative to E90ML/data/output
-    # This overrides potential misconfiguration in DEFAULT_OUTPUT_DIR
-    default_output_dir = project_root / "data" / "output"
-    root_output_path = resolve_dir(root_output_raw, default_output_dir, project_root)
+    root_output_path = resolve_dir(root_output_raw, data_output_dir, base_dir)
+    if root_output_path.resolve() == test_file_path.resolve():
+        raise ValueError("test.output_file must be different from test.input_file.")
         
     # Determine the input ROOT file path
     if isinstance(files, list):
