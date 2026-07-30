@@ -1,0 +1,163 @@
+# E90ML v1 configuration for macOS (Apple Silicon)
+
+metadata:
+  purpose: "Binary classification (SigmaNCusp vs background)"
+  environment: "macOS (Apple Silicon)"
+  notes: "Labels: SigmaNCusp=1 (signal), QFLambda=2, QFSigmaZ=3."
+
+# -----------------------------------------------------------------------------
+# [BSUB] - Kept for schema compatibility; direct Python execution is used on Mac
+# -----------------------------------------------------------------------------
+# conda_env : Conda environment name
+# queue     : LSF queue (unused on macOS)
+# email     : LSF notification address (unused on macOS)
+# -----------------------------------------------------------------------------
+bsub:
+  conda_env: pyml
+  queue: s
+  email: ""
+
+# -----------------------------------------------------------------------------
+# [DATA] - Input Data Settings
+# -----------------------------------------------------------------------------
+# files           : Input ROOT files under data/input
+# tree_name       : Name of the TTree in ROOT files
+# label_column    : Column containing truth labels
+# feature_columns : Model input features
+# fraction        : Fraction loaded before each pipeline-specific fraction
+# split_seed      : Shared outer train/validation split seed
+# val_split       : Final validation fraction reserved before tuning
+# -----------------------------------------------------------------------------
+data:
+  files:
+    SigmaNCusp: SigmaNCusp.root
+    QFLambda: QFLambda.root
+    QFSigmaZ: QFSigmaZ.root
+  tree_name: g4s2s
+  label_column: label
+  feature_columns:
+    - t0_ux
+    - t0_uy
+    - t0_uz
+    - t0_dedx
+    - t1_ux
+    - t1_uy
+    - t1_uz
+    - t1_dedx
+    - t2_ux
+    - t2_uy
+    - t2_uz
+    - t2_dedx
+  fraction: 1.0
+  split_seed: 90
+  val_split: 0.2
+
+# -----------------------------------------------------------------------------
+# [TUNING] - Hyperparameter Optimization (src/tune.py)
+# -----------------------------------------------------------------------------
+# bsub.*            : Retained for compatibility; unused for direct Mac execution
+# seed              : RNG seed (leave blank for random)
+# fraction          : Data fraction used for tuning
+# val_split         : Inner validation ratio within the tuning subset
+# epochs            : Epochs per trial
+# n_trials          : Total number of Optuna trials
+# num_workers       : Use 0 on macOS to avoid multiprocessing resource exhaustion
+# direction         : Minimize weighted validation BCE loss
+# search_space      : batch size, layers, units, dropout, and learning-rate ranges
+# study_db_file     : SQLite database used for resume
+# study_name        : Optuna study name
+# tune_params_file  : Best hyperparameters JSON
+# study_summary_file: Trial history CSV
+# data_summary_file : Train/validation event counts JSON
+# plots.*           : Optuna diagnostic plot filenames
+# -----------------------------------------------------------------------------
+tuning:
+  bsub:
+    job_name: v1_mac_tune_demo
+    log_file: lsflog/v1_mac_tune_demo.log
+  seed: 42
+  fraction: 0.05
+  val_split: 0.2
+  epochs: 10
+  n_trials: 100
+  num_workers: 0
+  direction: minimize
+  search_space:
+    batch_size: [128, 256, 512, 1024]
+    n_layers: {min: 2, max: 10}
+    hidden_units: {min: 256, max: 1024}
+    dropout: {min: 0.0, max: 0.4}
+    lr: {min: 1.0e-4, max: 1.0e-2}
+  study_db_file: v1_mac_demo.db
+  study_name: v1_mac_tune_demo
+  tune_params_file: v1_mac_tuned_params_demo.json
+  study_summary_file: v1_mac_trials_demo.csv
+  data_summary_file: v1_mac_tuning_data_demo.json
+  plots:
+    optimization_history_file: v1_mac_history_demo.png
+    param_importances_file: v1_mac_importances_demo.png
+    param_slice_file: v1_mac_slice_demo.png
+
+# -----------------------------------------------------------------------------
+# [TRAINING] - Final Model Training (src/train.py)
+# -----------------------------------------------------------------------------
+# seed                : RNG seed
+# fraction            : Data fraction (normally 1.0)
+# epochs              : Maximum epochs
+# patience            : Epochs without validation-loss improvement before stopping
+# num_workers         : Use 0 for stable macOS execution
+# checkpoint_file     : Resume checkpoint
+# model_output_file   : Final model weights
+# scaler_output_file  : StandardScaler output
+# best_params_file    : Tuned parameters loaded for final training
+# history_output_file : Per-epoch loss/F1 CSV
+# plot_output_file    : Training curves
+# dropout_rate_override: Optional controlled-ablation value; omit for tuned value
+# f1_ylim             : Fixed F1-score axis range for comparable learning curves
+# loss_ylim           : Fixed loss axis range for comparable learning curves
+# data_summary_file   : Train/validation event counts JSON
+# -----------------------------------------------------------------------------
+training:
+  bsub:
+    job_name: v1_mac_train_demo
+    log_file: lsflog/v1_mac_train_demo.log
+  seed: 90
+  fraction: 1.0
+  epochs: 100
+  patience: 10
+  num_workers: 0
+  checkpoint_file: v1_mac_demo.pth
+  model_output_file: v1_mac_out_demo.pth
+  scaler_output_file: v1_mac_demo.pkl
+  best_params_file: v1_mac_tuned_params_demo.json
+  history_output_file: v1_mac_train_history_demo.csv
+  plot_output_file: v1_mac_train_history_demo.png
+  f1_ylim: [0.0, 1.0]
+  loss_ylim: [0.0, 0.8]
+  data_summary_file: v1_mac_training_data_demo.json
+
+# -----------------------------------------------------------------------------
+# [TEST] - Inference Settings (src/test.py)
+# -----------------------------------------------------------------------------
+# input_file        : Test ROOT file under data/input
+# fraction          : Must be 1.0 when writing predictions to the full ROOT tree
+# batch_size        : Inference batch size
+# num_workers       : Use 0 for stable macOS execution
+# output_file       : ROOT output with the NN score branch
+# roc_output_file   : ROC curve image
+# data_summary_file : Test event counts JSON
+# -----------------------------------------------------------------------------
+test:
+  bsub:
+    job_name: v1_mac_test_demo
+    log_file: lsflog/v1_mac_test_demo.log
+  input_file: test.root
+  fraction: 1.0
+  batch_size: 128
+  num_workers: 0
+  output_file: v1_mac_test_demo.root
+  roc_output_file: v1_mac_roc_demo.png
+  data_summary_file: v1_mac_test_data_demo.json
+
+# auto selects CUDA, then MPS, then CPU.
+device: auto
