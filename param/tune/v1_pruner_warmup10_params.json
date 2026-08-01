@@ -1,0 +1,7 @@
+{
+    "batch_size": 512,
+    "n_layers": 5,
+    "hidden_units": 472,
+    "dropout_rate": 0.2513583423721064,
+    "lr": 0.0008034166097392083
+}

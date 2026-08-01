@@ -1,0 +1,12 @@
+extends: config_warmup10_mac_demo.yaml
+
+tuning:
+  study_db_file: ../../param/tune/v1_pruner_warmup10.db
+  study_name: v1_pruner_warmup10
+  tune_params_file: ../../param/tune/v1_pruner_warmup10_params.json
+  study_summary_file: ../../data/output/v1_pruner_warmup10_trials.csv
+  data_summary_file: ../../data/output/v1_pruner_warmup10_data.json
+  plots:
+    optimization_history_file: v1_pruner_warmup10_history.png
+    param_importances_file: v1_pruner_warmup10_importances.png
+    param_slice_file: v1_pruner_warmup10_slice.png

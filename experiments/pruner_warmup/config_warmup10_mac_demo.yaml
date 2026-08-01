@@ -1,0 +1,19 @@
+extends: ../../param/usr/v1_mac_demo.yaml
+
+metadata:
+  notes: "100-trial MedianPruner comparison with n_warmup_steps=10."
+
+tuning:
+  epochs: 100
+  n_trials: 100
+  pruner:
+    n_warmup_steps: 10
+  study_db_file: ../../param/tune/v1_pruner_warmup10_demo.db
+  study_name: v1_pruner_warmup10_demo
+  tune_params_file: ../../param/tune/v1_pruner_warmup10_params_demo.json
+  study_summary_file: ../../data/output/v1_pruner_warmup10_trials_demo.csv
+  data_summary_file: ../../data/output/v1_pruner_warmup10_data_demo.json
+  plots:
+    optimization_history_file: v1_pruner_warmup10_history_demo.png
+    param_importances_file: v1_pruner_warmup10_importances_demo.png
+    param_slice_file: v1_pruner_warmup10_slice_demo.png
