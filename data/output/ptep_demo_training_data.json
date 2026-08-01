@@ -1,0 +1,29 @@
+{
+  "stage": "training",
+  "source_files": [
+    "/Users/ame38/work/E90ML/data/input/SigmaNCusp.root",
+    "/Users/ame38/work/E90ML/data/input/QFLambda.root",
+    "/Users/ame38/work/E90ML/data/input/QFSigmaZ.root"
+  ],
+  "fraction": 1.0,
+  "seed": 90,
+  "split_seed": 90,
+  "val_split": 0.2,
+  "train_unique_groups": 7149085,
+  "validation_unique_groups": 1785881,
+  "overlapping_groups": 0,
+  "train": {
+    "total": 8908774,
+    "class_counts": {
+      "0": 5164628,
+      "1": 3744146
+    }
+  },
+  "validation": {
+    "total": 2224798,
+    "class_counts": {
+      "0": 1289882,
+      "1": 934916
+    }
+  }
+}

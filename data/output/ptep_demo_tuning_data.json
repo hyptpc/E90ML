@@ -1,0 +1,37 @@
+{
+  "stage": "tuning",
+  "source_files": [
+    "/Users/ame38/work/E90ML/data/input/SigmaNCusp.root",
+    "/Users/ame38/work/E90ML/data/input/QFLambda.root",
+    "/Users/ame38/work/E90ML/data/input/QFSigmaZ.root"
+  ],
+  "fraction": 0.05,
+  "seed": 42,
+  "split_seed": 90,
+  "outer_val_split": 0.2,
+  "val_split": 0.2,
+  "outer_validation_reserved": {
+    "total": 2224798,
+    "class_counts": {
+      "0": 1289882,
+      "1": 934916
+    }
+  },
+  "train_unique_groups": 350561,
+  "validation_unique_groups": 87467,
+  "overlapping_groups": 0,
+  "train": {
+    "total": 356536,
+    "class_counts": {
+      "0": 206604,
+      "1": 149932
+    }
+  },
+  "validation": {
+    "total": 88903,
+    "class_counts": {
+      "0": 51617,
+      "1": 37286
+    }
+  }
+}
