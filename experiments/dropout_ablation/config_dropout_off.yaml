@@ -1,0 +1,19 @@
+extends: ../../param/usr/v1_mac_demo.yaml
+
+metadata:
+  notes: "Controlled Dropout ablation for the reported ptep_demo run."
+
+training:
+  dropout_rate_override: 0.0
+  checkpoint_file: ../../param/pth/ptep_demo_dropout0_checkpoint.pth
+  model_output_file: ../../param/pth/ptep_demo_dropout0.pth
+  scaler_output_file: ../../param/pth/ptep_demo_dropout0.pkl
+  best_params_file: ../../param/tune/ptep_demo.json
+  history_output_file: ptep_demo_dropout0_train_history.csv
+  plot_output_file: ptep_demo_dropout0_train_history.png
+  data_summary_file: ptep_demo_dropout0_training_data.json
+
+test:
+  output_file: ptep_demo_dropout0_test.root
+  roc_output_file: ptep_demo_dropout0_roc.png
+  data_summary_file: ptep_demo_dropout0_test_data.json

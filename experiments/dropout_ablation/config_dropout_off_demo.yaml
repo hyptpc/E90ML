@@ -1,13 +1,14 @@
-extends: v1_mac_demo.yaml
+extends: ../../param/usr/v1_mac_demo.yaml
 
 metadata:
   notes: "macOS controlled ablation with Dropout disabled."
 
 training:
   dropout_rate_override: 0.0
-  checkpoint_file: v1_mac_nodropout_demo.pth
-  model_output_file: v1_mac_nodropout_out_demo.pth
-  scaler_output_file: v1_mac_nodropout_demo.pkl
+  checkpoint_file: ../../param/pth/v1_mac_nodropout_demo.pth
+  model_output_file: ../../param/pth/v1_mac_nodropout_out_demo.pth
+  scaler_output_file: ../../param/pth/v1_mac_nodropout_demo.pkl
+  best_params_file: ../../param/tune/ptep_demo.json
   history_output_file: v1_mac_nodropout_train_history_demo.csv
   plot_output_file: v1_mac_nodropout_train_history_demo.png
   data_summary_file: v1_mac_nodropout_training_data_demo.json

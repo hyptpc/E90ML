@@ -1,0 +1,15 @@
+{
+  "stage": "test",
+  "source_files": [
+    "/Users/ame38/work/E90ML/data/input/test.root"
+  ],
+  "fraction": 1.0,
+  "seed": null,
+  "data": {
+    "total": 78681,
+    "class_counts": {
+      "0": 49332,
+      "1": 29349
+    }
+  }
+}
