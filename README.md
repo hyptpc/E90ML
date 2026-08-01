@@ -1,8 +1,8 @@
 <div align="center">
 
-# Machine Learning for E90-QF surpression
+# Machine Learning for E90-QF Suppression
 
-Machine-learning analysis tools for the J-PARC E90 experiment.
+Reproducible machine-learning tools for the J-PARC E90 analysis.
 
 [![arXiv](https://img.shields.io/badge/arXiv-2606.22750-b31b1b.svg)](https://arxiv.org/abs/2606.22750v1)
 
@@ -10,36 +10,55 @@ Machine-learning analysis tools for the J-PARC E90 experiment.
 
 ---
 
-## Setup
+## Overview
 
-### 1. Create and activate the Conda environment
+The recommended `v1` pipeline trains a multilayer perceptron to separate the
+`SigmaNCusp` signal from the `QFLambda` and `QFSigmaZ` backgrounds. Its 12
+inputs are the `u_x`, `u_y`, `u_z`, and `dE/dx` variables for tracks `t0`, `t1`,
+and `t2`.
+
+The standard workflow consists of three commands:
+
+1. `src/tune.py`: Optuna hyperparameter optimization;
+2. `src/train.py`: final training with validation-loss early stopping;
+3. `src/test.py`: inference on the independent test sample.
+
+## Environment setup
+
+Create and activate the environment appropriate for the execution platform.
 
 ```bash
-# Linux / KEKCC
+# KEKCC/Linux: PyTorch 2.5.1 with the official CUDA 12.4 runtime
 conda env create -f environment.yml
 
-# macOS (Apple Silicon)
+# macOS/Apple Silicon: PyTorch with MPS support
 conda env create -f environment-macos.yml
 
 conda activate pyml
 ```
 
-### 2. Select the data directory
+The Linux environment targets CUDA 12.4. Before creating it on a different
+Linux system, check the NVIDIA driver with `nvidia-smi`. If that driver cannot
+support the configured CUDA runtime, select a compatible PyTorch wheel using
+the [official PyTorch installer](https://pytorch.org/get-started/locally/).
+
+Verify the backend after installation:
 
 ```bash
-# KEKCC: point to the shared data root
-export E90ML_DATA_DIR=/ghi/fs02/had/sks/Users/YOUR-DIRECTORY
+python -c 'import torch; print(torch.__version__); print("CUDA:", torch.cuda.is_available()); print("MPS:", torch.backends.mps.is_available())'
 ```
 
-When `E90ML_DATA_DIR` is set, the project uses its `input` directory for ROOT
-files and its `output` directory for generated files. Both directories are
-created automatically. If the variable is unset, the repository's `data`
-directory is used.
+The code uses PyTorch, NumPy, pandas, scikit-learn, Optuna, uproot, Awkward
+Array, PyYAML, and Matplotlib. SHAP is required only for
+`experiments/model_explanation/`.
 
-The expected layout is:
+## Data layout
+
+By default, input files are read from `./data/input` and generated data products
+are written below `./data/output`:
 
 ```text
-E90ML_DATA_DIR/
+data/
 ├── input/
 │   ├── SigmaNCusp.root
 │   ├── QFLambda.root
@@ -48,55 +67,80 @@ E90ML_DATA_DIR/
 └── output/
 ```
 
-## How to run
-
-Environment-specific configurations are provided for macOS and KEKCC:
+On KEKCC, point the project to the shared data area instead of copying large
+ROOT files into the repository:
 
 ```bash
-# macOS: run directly with MPS when available
-python src/tune.py -c param/usr/v1_mac.yaml
-python src/train.py -c param/usr/v1_mac.yaml
-python src/test.py -c param/usr/v1_mac.yaml
-
-# KEKCC: submit jobs to LSF
-./tune.sh  param/usr/v1_kekcc.yaml
-./train.sh param/usr/v1_kekcc.yaml
-./test.sh  param/usr/v1_kekcc.yaml
+export E90ML_DATA_DIR=/ghi/fs02/had/sks/Users/YOUR-DIRECTORY
 ```
 
-Personal configuration files are ignored by Git. To create one from a shared
-template:
+The pipeline then uses `${E90ML_DATA_DIR}/input` and
+`${E90ML_DATA_DIR}/output`, creating both directories when necessary.
+
+## Configuration
+
+Self-contained templates are provided for both platforms:
 
 ```bash
 cp param/usr/v1_mac_demo.yaml param/usr/v1_mac.yaml
 cp param/usr/v1_kekcc_demo.yaml param/usr/v1_kekcc.yaml
 ```
 
-Each environment-specific demo is self-contained and documents all available
-settings. Personal configuration files can inherit from the corresponding demo
-and override only the values that need to change.
+Personal YAML files are ignored by Git. The demo files document the data split,
+search space, random seeds, early stopping, output names, and platform-specific
+worker settings. `device: auto` selects CUDA first, then MPS, then CPU.
 
-- `v1_mac.yaml` uses `num_workers: 0` for stable local execution.
-- `v1_kekcc.yaml` uses LSF settings and worker processes for batch jobs.
-- `device: auto` selects CUDA, then MPS, then CPU.
+## Running the pipeline
 
-For a controlled Dropout ablation, keep the tuned architecture and optimizer
-settings fixed and override only the training Dropout rate:
+Run directly on macOS:
 
-```yaml
-extends: v1_mac.yaml
-
-training:
-  dropout_rate_override: 0.0
+```bash
+python src/tune.py  -c param/usr/v1_mac.yaml
+python src/train.py -c param/usr/v1_mac.yaml
+python src/test.py  -c param/usr/v1_mac.yaml
 ```
 
-Use distinct checkpoint, model, scaler, history, plot, and test output names
-for the Dropout ON and OFF runs. `v1_mac_nodropout_demo.yaml` provides a shared
-example.
+Submit the same stages to LSF on KEKCC:
 
-## Branch differences
+```bash
+./tune.sh  param/usr/v1_kekcc.yaml
+./train.sh param/usr/v1_kekcc.yaml
+./test.sh  param/usr/v1_kekcc.yaml
+```
 
-- **v1 (recommended):** Standard MLP configuration. Input features are `u` and `dE/dx` (12 variables from t0/t1/t2).
-  - Use `v1_mac_demo.yaml` or `v1_kekcc_demo.yaml` as the baseline configuration.
-- **v2:** GNN model. Accuracy is not good.
-- **v3:** Extension of v1 that computes `open_angle` from `u` and uses it as an input feature. Accuracy is comparable to v1.
+The final test output is written as a ROOT `TTree` for compatibility with the
+existing ROOT analysis macros.
+
+## Reproducible demo artifacts
+
+The repository retains the compact artifacts needed to inspect or continue the
+documented `ptep_demo` run without repeating every expensive stage:
+
+- `param/tune/ptep_demo.db`: Optuna study database;
+- `param/tune/ptep_demo.json`: selected hyperparameters;
+- `param/pth/ptep_demo.pth`: final weights selected by minimum validation loss;
+- `param/pth/ptep_demo.pkl`: fitted `StandardScaler`.
+
+Per-epoch histories, data-count summaries, trial summaries, and the principal
+diagnostic plots are also retained as curated results. Raw input ROOT files,
+checkpoints, logs, and regenerable test ROOT outputs remain local.
+
+## Supplementary experiments
+
+Reproducible studies that are not part of the standard tune/train/test pipeline
+live under `experiments/`:
+
+- `experiments/dropout_ablation/`: controlled Dropout ON/OFF comparison;
+- `experiments/pruner_warmup/`: MedianPruner warmup comparison;
+- `experiments/model_explanation/`: multi-seed SHAP feature-importance analysis.
+
+Each directory contains its configuration, executable code, reproduction
+instructions, and—where appropriate—a technical report. The exact report
+databases and numerical summaries are retained, while `*_demo.yaml` files use
+non-conflicting output names for a fresh run.
+
+## Branches
+
+- **v1 (recommended):** 12-variable MLP using track directions and `dE/dx`;
+- **v2:** graph neural network study;
+- **v3:** `v1` extension including the track opening angle.

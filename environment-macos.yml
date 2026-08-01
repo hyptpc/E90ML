@@ -5,14 +5,13 @@ dependencies:
   - python=3.10
   - pip
   - pip:
-      - awkward
-      - lightgbm
-      - matplotlib
-      - numpy
-      - optuna
-      - pandas
-      - pyyaml
-      - scikit-learn
-      - shap
-      - torch
-      - uproot
+      - awkward==2.12.0
+      - matplotlib==3.10.9
+      - numpy==2.2.6
+      - optuna==4.9.0
+      - pandas==2.3.3
+      - pyyaml==6.0.3
+      - scikit-learn==1.7.2
+      - shap==0.49.1
+      - torch==2.13.0
+      - uproot==5.7.5

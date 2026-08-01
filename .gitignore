@@ -3,7 +3,7 @@
 *.csv
 *.png
 *.db
-*demo.db
+!/param/tune/ptep_demo.db
 *.pkl
 !*demo.pkl
 *.pth
@@ -12,7 +12,7 @@
 !*demo.yaml
 *.json
 !*demo.json
-src/__pycache__
+__pycache__/
 /ana/
 /lognote/
 /data/output/
