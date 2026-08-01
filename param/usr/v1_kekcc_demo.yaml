@@ -59,10 +59,11 @@ data:
 # seed              : RNG seed (leave blank for random)
 # fraction          : Data fraction used for tuning
 # val_split         : Inner validation ratio within the tuning subset
-# epochs            : Epochs per trial
+# epochs            : Maximum epochs per trial
 # n_trials          : Total number of Optuna trials
 # num_workers       : DataLoader worker processes on the compute node
 # direction         : Minimize weighted validation BCE loss
+# pruner.*          : Non-default MedianPruner overrides justified by experiments
 # search_space      : batch size, layers, units, dropout, and learning-rate ranges
 # study_db_file     : SQLite database used for resume
 # study_name        : Optuna study name
@@ -73,30 +74,32 @@ data:
 # -----------------------------------------------------------------------------
 tuning:
   bsub:
-    job_name: v1_kekcc_tune_demo
-    log_file: lsflog/v1_kekcc_tune_demo.log
+    job_name: ptep_demo_tune
+    log_file: lsflog/ptep_demo_tune.log
   seed: 42
   fraction: 0.05
   val_split: 0.2
-  epochs: 10
+  epochs: 100
   n_trials: 100
   num_workers: 2
   direction: minimize
+  pruner:
+    n_warmup_steps: 10
   search_space:
     batch_size: [128, 256, 512, 1024]
     n_layers: {min: 2, max: 10}
     hidden_units: {min: 256, max: 1024}
     dropout: {min: 0.0, max: 0.4}
     lr: {min: 1.0e-4, max: 1.0e-2}
-  study_db_file: v1_kekcc_demo.db
-  study_name: v1_kekcc_tune_demo
-  tune_params_file: v1_kekcc_tuned_params_demo.json
-  study_summary_file: v1_kekcc_trials_demo.csv
-  data_summary_file: v1_kekcc_tuning_data_demo.json
+  study_db_file: ptep_demo.db
+  study_name: ptep_demo
+  tune_params_file: ptep_demo.json
+  study_summary_file: ptep_demo_trials.csv
+  data_summary_file: ptep_demo_tuning_data.json
   plots:
-    optimization_history_file: v1_kekcc_history_demo.png
-    param_importances_file: v1_kekcc_importances_demo.png
-    param_slice_file: v1_kekcc_slice_demo.png
+    optimization_history_file: ptep_demo_history.png
+    param_importances_file: ptep_demo_importances.png
+    param_slice_file: ptep_demo_slice.png
 
 # -----------------------------------------------------------------------------
 # [TRAINING] - Final Model Training (src/train.py)
@@ -113,28 +116,29 @@ tuning:
 # history_output_file : Per-epoch loss/F1 CSV
 # plot_output_file    : Training curves
 # dropout_rate_override: Optional controlled-ablation value; omit for tuned value
-# f1_ylim             : Fixed F1-score axis range for comparable learning curves
-# loss_ylim           : Fixed loss axis range for comparable learning curves
+# f1_ylim             : Focused F1-score axis range for readable learning curves
+# loss_ylim           : Focused loss axis range for readable learning curves
+# epoch display range : Automatically rounded up from the last recorded epoch
 # data_summary_file   : Train/validation event counts JSON
 # -----------------------------------------------------------------------------
 training:
   bsub:
-    job_name: v1_kekcc_train_demo
-    log_file: lsflog/v1_kekcc_train_demo.log
+    job_name: ptep_demo_train
+    log_file: lsflog/ptep_demo_train.log
   seed: 90
   fraction: 1.0
   epochs: 100
   patience: 10
   num_workers: 2
-  checkpoint_file: v1_kekcc_demo.pth
-  model_output_file: v1_kekcc_out_demo.pth
-  scaler_output_file: v1_kekcc_demo.pkl
-  best_params_file: v1_kekcc_tuned_params_demo.json
-  history_output_file: v1_kekcc_train_history_demo.csv
-  plot_output_file: v1_kekcc_train_history_demo.png
-  f1_ylim: [0.0, 1.0]
-  loss_ylim: [0.0, 0.8]
-  data_summary_file: v1_kekcc_training_data_demo.json
+  checkpoint_file: ptep_demo_checkpoint.pth
+  model_output_file: ptep_demo.pth
+  scaler_output_file: ptep_demo.pkl
+  best_params_file: ptep_demo.json
+  history_output_file: ptep_demo_train_history.csv
+  plot_output_file: ptep_demo_train_history.png
+  f1_ylim: [0.7, 0.8]
+  loss_ylim: [0.5, 0.6]
+  data_summary_file: ptep_demo_training_data.json
 
 # -----------------------------------------------------------------------------
 # [TEST] - Inference Settings (src/test.py)
@@ -149,15 +153,15 @@ training:
 # -----------------------------------------------------------------------------
 test:
   bsub:
-    job_name: v1_kekcc_test_demo
-    log_file: lsflog/v1_kekcc_test_demo.log
+    job_name: ptep_demo_test
+    log_file: lsflog/ptep_demo_test.log
   input_file: test.root
   fraction: 1.0
   batch_size: 128
   num_workers: 2
-  output_file: v1_kekcc_test_demo.root
-  roc_output_file: v1_kekcc_roc_demo.png
-  data_summary_file: v1_kekcc_test_data_demo.json
+  output_file: ptep_demo_test.root
+  roc_output_file: ptep_demo_roc.png
+  data_summary_file: ptep_demo_test_data.json
 
 # auto selects CUDA, then MPS, then CPU.
 device: auto

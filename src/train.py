@@ -40,7 +40,12 @@ from common import (
 )
 
 
-def _plot_training_curves(history, out_path: Path, max_epochs, f1_ylim, loss_ylim):
+def _epoch_axis_upper(recorded_epochs: int) -> int:
+    """Round the displayed epoch range to the next readable ten-epoch bound."""
+    return max(10, int(np.ceil(recorded_epochs / 10.0) * 10))
+
+
+def _plot_training_curves(history, out_path: Path, f1_ylim, loss_ylim):
     import matplotlib.pyplot as plt
 
     apply_plot_style()
@@ -49,13 +54,14 @@ def _plot_training_curves(history, out_path: Path, max_epochs, f1_ylim, loss_yli
 
     plt.subplot(1, 2, 1)
     epoch_values = np.arange(1, len(history["train_f1"]) + 1)
+    epoch_upper = _epoch_axis_upper(len(epoch_values))
     plt.plot(epoch_values, history["train_f1"], c="blue", label="train", linestyle="-")
     plt.plot(epoch_values, history["val_f1"], c="red", label="val", linestyle="-")
     plt.legend()
     plt.xlabel("epoch")
     plt.ylabel("F1-score")
     plt.title("Training and validation F1-score")
-    plt.xlim(0, max_epochs)
+    plt.xlim(0, epoch_upper)
     plt.ylim(*f1_ylim)
     plt.grid()
 
@@ -66,7 +72,7 @@ def _plot_training_curves(history, out_path: Path, max_epochs, f1_ylim, loss_yli
     plt.xlabel("epoch")
     plt.ylabel("loss")
     plt.title("Training and validation loss")
-    plt.xlim(0, max_epochs)
+    plt.xlim(0, epoch_upper)
     plt.ylim(*loss_ylim)
     plt.grid()
 
@@ -168,8 +174,8 @@ def train_final(config, base_dir):
     num_workers = int(training_cfg["num_workers"])
     epochs = int(training_cfg["epochs"])
     patience = int(training_cfg["patience"])
-    f1_ylim = tuple(float(value) for value in training_cfg.get("f1_ylim", [0.0, 1.0]))
-    loss_ylim = tuple(float(value) for value in training_cfg.get("loss_ylim", [0.0, 0.8]))
+    f1_ylim = tuple(float(value) for value in training_cfg.get("f1_ylim", [0.7, 0.8]))
+    loss_ylim = tuple(float(value) for value in training_cfg.get("loss_ylim", [0.5, 0.6]))
     batch_size_override = training_cfg.get("batch_size")
     dropout_rate_override = training_cfg.get("dropout_rate_override")
     if patience < 1:
@@ -491,7 +497,7 @@ def train_final(config, base_dir):
         plot_output_path = plot_output_path / "training_curves.png"
     plot_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    _plot_training_curves(history, plot_output_path, epochs, f1_ylim, loss_ylim)
+    _plot_training_curves(history, plot_output_path, f1_ylim, loss_ylim)
     print(f"Saved training curves to '{plot_output_path}'.")
 
     # Training history (loss/F1 per epoch)

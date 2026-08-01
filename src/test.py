@@ -65,7 +65,9 @@ def save_predictions_to_root(input_path: Path, tree_name: str, predictions: list
 
     print(f"Writing output to: {output_path}")
     with uproot.recreate(output_path) as outfile:
-        outfile[tree_name] = branch_dict
+        # Write an actual TTree rather than uproot's default RNTuple so the
+        # output remains readable by the existing ROOT analysis macros.
+        outfile.mktree(tree_name, branch_dict)
 
 
 def _plot_roc_curve(y_true: list, y_score: list, out_path: Path):

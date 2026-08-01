@@ -266,24 +266,22 @@ def objective_factory(config, base_dir):
         else:
             criterion = nn.CrossEntropyLoss()
 
-        best_val_loss = float("inf")
-        for epoch in range(epochs):
+        def train_step(inputs, labels_batch):
             model.train()
-            for inputs, labels_batch in train_loader:
-                inputs = inputs.to(device, non_blocking=True)
-                labels_batch = labels_batch.to(device, non_blocking=True)
-                
-                optimizer.zero_grad(set_to_none=True)
-                if num_classes == 2:
-                    outputs = model(inputs).squeeze(1)
-                    loss = criterion(outputs, labels_batch.float())
-                else:
-                    outputs = model(inputs)
-                    loss = criterion(outputs, labels_batch)
-                loss.backward()
-                optimizer.step()
+            inputs = inputs.to(device, non_blocking=True)
+            labels_batch = labels_batch.to(device, non_blocking=True)
 
-            # Validation
+            optimizer.zero_grad(set_to_none=True)
+            if num_classes == 2:
+                outputs = model(inputs).squeeze(1)
+                loss = criterion(outputs, labels_batch.float())
+            else:
+                outputs = model(inputs)
+                loss = criterion(outputs, labels_batch)
+            loss.backward()
+            optimizer.step()
+
+        def evaluate_validation():
             model.eval()
             val_loss_sum = 0.0
             val_sample_count = 0
@@ -313,6 +311,15 @@ def objective_factory(config, base_dir):
 
             val_loss = val_loss_sum / val_sample_count
             val_f1 = compute_f1(val_true, val_pred, num_classes) if val_true else 0.0
+            return val_loss, val_f1
+
+        best_val_loss = float("inf")
+
+        for epoch in range(epochs):
+            for inputs, labels_batch in train_loader:
+                train_step(inputs, labels_batch)
+
+            val_loss, val_f1 = evaluate_validation()
             best_val_loss = min(best_val_loss, val_loss)
 
             trial.set_user_attr(f"val_f1_epoch_{epoch + 1}", val_f1)
@@ -360,24 +367,52 @@ def run_tuning(config, base_dir, plots_only=False):
     db_path.parent.mkdir(parents=True, exist_ok=True)
     storage_url = f"sqlite:///{db_path}"
     study_name = tuning_cfg.get("study_name", "e90_hyperopt")
+    seed = _resolve_seed(tuning_cfg.get("seed"), config.get("seed"))
+    sampler = optuna.samplers.TPESampler(seed=seed)
+    pruner_cfg = tuning_cfg.get("pruner")
+    pruner = None
+    if pruner_cfg is not None:
+        supported_pruner_keys = {
+            "n_startup_trials",
+            "n_warmup_steps",
+            "interval_steps",
+            "n_min_trials",
+        }
+        unknown_keys = set(pruner_cfg) - supported_pruner_keys
+        if unknown_keys:
+            unknown = ", ".join(sorted(unknown_keys))
+            raise ValueError(f"Unsupported tuning.pruner settings: {unknown}")
+        pruner = optuna.pruners.MedianPruner(
+            **{key: int(value) for key, value in pruner_cfg.items()}
+        )
 
     print(f"Optuna database: {storage_url}")
     print(f"Study Name:      {study_name}")
-    
-    study = optuna.create_study(
+    print(f"Sampler:         TPESampler (seed={seed})")
+    if pruner is None:
+        print("Pruner:          Optuna default")
+    else:
+        configured = ", ".join(f"{key}={value}" for key, value in pruner_cfg.items())
+        print(f"Pruner:          MedianPruner ({configured})")
+
+    study_options = dict(
         study_name=study_name,
         storage=storage_url,
         load_if_exists=True,
-        direction=direction
+        direction=direction,
+        sampler=sampler,
     )
+    if pruner is not None:
+        study_options["pruner"] = pruner
+    study = optuna.create_study(**study_options)
     
     if not plots_only:
-        completed_trials = len(study.trials)
-        remaining_trials = target_trials - completed_trials
+        attempted_trials = len(study.trials)
+        remaining_trials = target_trials - attempted_trials
 
         if remaining_trials > 0:
             print(
-                f"Resuming study. Completed: {completed_trials}, "
+                f"Resuming study. Existing: {attempted_trials}, "
                 f"Remaining: {remaining_trials}, Target: {target_trials}"
             )
             objective = objective_factory(config, base_dir)
@@ -388,7 +423,7 @@ def run_tuning(config, base_dir, plots_only=False):
                 sys.exit(0)
         else:
             print(
-                f"Study already has {completed_trials} trials "
+                f"Study already has {attempted_trials} trials "
                 f"(Target: {target_trials}). Skipping optimization."
             )
 
@@ -486,6 +521,31 @@ def run_tuning(config, base_dir, plots_only=False):
         for ax in fig.axes:
             parameter = ax.get_xlabel()
             if parameter == "batch_size":
+                # Optuna assigns categorical coordinates only to values that
+                # occur in completed trials.  If one configured batch size has
+                # no completed trial, blindly replacing the tick labels shifts
+                # every plotted point onto the wrong category.  Remap the
+                # existing categorical coordinates to the full configured
+                # search-space order before adding the missing ticks.
+                observed_positions = ax.get_xticks()
+                observed_labels = [label.get_text() for label in ax.get_xticklabels()]
+                target_by_label = {
+                    str(value): position for position, value in enumerate(batch_sizes)
+                }
+                coordinate_map = {
+                    float(position): float(target_by_label[label])
+                    for position, label in zip(observed_positions, observed_labels)
+                    if label in target_by_label
+                }
+                for collection in ax.collections:
+                    offsets = collection.get_offsets()
+                    if offsets.size == 0:
+                        continue
+                    remapped = np.asarray(offsets, dtype=float).copy()
+                    original_x = remapped[:, 0].copy()
+                    for source, target in coordinate_map.items():
+                        remapped[np.isclose(original_x, source), 0] = target
+                    collection.set_offsets(remapped)
                 positions = np.arange(len(batch_sizes))
                 ax.set_xlim(-0.5, len(batch_sizes) - 0.5)
                 ax.set_xticks(positions, labels=[str(value) for value in batch_sizes])
