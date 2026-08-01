@@ -13,7 +13,5 @@
 *.json
 !*demo.json
 __pycache__/
-/ana/
-/lognote/
 /data/output/
 /data/input/
