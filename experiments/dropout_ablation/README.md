@@ -31,9 +31,20 @@ Validation loss and F1-score are evaluated at the end of each epoch using `model
 
 ![Dropout ON/OFF learning-curve comparison](../../plots/train/ptep_demo_dropout_comparison.png)
 
-The validation curves are qualitatively consistent between the two conditions. Validation loss remains within the same narrow range and follows a similar learning trend, while validation F1-score stays at a comparable level. Neither curve develops visible instability or a systematic shift when Dropout is removed. Validation loss therefore remains a stable criterion for early stopping and selection of the saved model weights. The same criterion and patience are used in both runs; differences in the selected and stopping epochs simply reflect their respective validation histories.
+The vertical dashed lines mark the checkpoints selected by minimum validation loss: epoch 28 for Dropout ON and epoch 7 for Dropout OFF. They indicate the saved epochs, not the later epochs at which early stopping terminated each run.
+
+The validation curves are qualitatively consistent between the two conditions. Validation loss remains within the same narrow range and follows a similar learning trend, while validation F1-score stays at a comparable level. Neither curve develops visible instability or a large systematic shift when Dropout is removed. Validation loss therefore remains a stable criterion for early stopping and selection of the saved model weights.
+
+| Condition | Best epoch | Minimum validation loss | Stopping epoch |
+|---|---:|---:|---:|
+| Dropout ON | 28 | 0.514129 | 38 |
+| Dropout OFF | 7 | 0.515081 | 17 |
 
 In contrast, the relationship between the training and validation curves changes clearly. With Dropout ON, training loss remains higher than validation loss throughout the learning curve, and training F1-score is almost always lower than validation F1-score. With Dropout OFF, this ordering is limited to the initial part of training; the training loss subsequently falls below the validation loss, and the training F1-score generally rises above the validation F1-score. Removing Dropout therefore restores the conventional train/validation ordering for most of the learning history.
+
+The Dropout OFF curve also shows the onset of mild overfitting after epoch 7. From epoch 7 to epoch 17, training loss decreases from 0.5138 to 0.5083 and training F1-score increases from 0.7610 to 0.7637, whereas validation loss no longer improves (0.5151 to 0.5159) and validation F1-score remains approximately constant (0.7610 to 0.7604). This increasing generalization gap is consistent with further fitting of the training data without a corresponding improvement on validation data. The validation loss does not deteriorate sharply, so the result is better described as mild overfitting or saturation of generalization performance rather than severe overfitting.
+
+Early stopping handles this behavior as intended. The Dropout OFF run stops at epoch 17 after ten epochs without a new minimum, but the saved model is restored to the epoch-7 weights. The selected no-Dropout model therefore does not use the later weights for which the train/validation gap has grown.
 
 The combination of stable validation curves and changing training curves indicates that the inversion originates primarily from how the training metrics are measured. With Dropout ON, those metrics are obtained from networks with randomly masked activations, whereas validation uses the complete inference network with Dropout disabled. The training data are consequently evaluated under a noisier and more difficult condition than the validation data. Once this training-side perturbation is removed, the persistent inversion also disappears.
 
@@ -41,11 +52,11 @@ A small inversion remains during the first few Dropout OFF epochs. This can aris
 
 ## 4. Conclusion
 
-The learning-curve comparison shows that training-time Dropout explains the observed persistent inversion between training and validation metrics. The validation loss and F1-score remain at consistent levels when Dropout is removed, while the training curves move from the inverted ordering to the conventional ordering after the first few epochs. The change is therefore not driven by an unstable validation metric; it is driven primarily by measuring training performance with Dropout active.
+The learning-curve comparison shows that training-time Dropout explains the observed persistent inversion between training and validation metrics. The validation loss and F1-score remain at consistent levels when Dropout is removed, while the training curves move from the inverted ordering to the conventional ordering after the first few epochs. The change is therefore not driven by an unstable validation metric; it is driven primarily by measuring training performance with Dropout active. The subsequent widening of the Dropout OFF train/validation gap indicates mild overfitting after its best validation epoch, and early stopping prevents those later weights from being selected.
 
 The result does not indicate that Dropout was incorrectly applied to validation data. The code follows the standard procedure: Dropout is active during optimization with `model.train()` and disabled during validation with `model.eval()`. Because the validation loss remains stable and is evaluated without Dropout, it remains an appropriate quantity for early stopping and selection of the saved weights. The lower validation loss and higher validation F1-score relative to training can be explained by the training/evaluation mode difference without invoking data leakage or an error in validation.
 
-This experiment isolates the explanation of the learning-curve shape. It does not determine whether Dropout should be removed from the final model or compare the best achievable performance after independently retuning the no-Dropout model.
+This experiment isolates the explanation of the learning-curve shape. Because it contains only one training seed per condition and the validation curves are close, it does not establish a statistically significant generalization advantage for Dropout. It also does not determine whether Dropout should be removed from the final model or compare the best achievable performance after independently retuning the no-Dropout model. Such a claim would require matched repeated trainings across multiple seeds and comparison of the selected checkpoints on the independent test sample.
 
 ## 5. Reproduction
 

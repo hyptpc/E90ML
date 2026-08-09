@@ -15,4 +15,6 @@ python -u src/test.py -c experiments/dropout_ablation/config_dropout_off.yaml
 python -u experiments/dropout_ablation/plot_comparison.py \
   --dropout data/output/ptep_demo_train_history.csv \
   --no-dropout data/output/ptep_demo_dropout0_train_history.csv \
+  --f1-range 0.74 0.77 \
+  --loss-range 0.50 0.55 \
   --output plots/train/ptep_demo_dropout_comparison.png

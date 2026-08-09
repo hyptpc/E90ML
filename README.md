@@ -121,11 +121,11 @@ If you use this code or the analysis method in your work, please cite the
 corresponding paper:
 
 ```bibtex
-@article{Amemiya2026E90ML,
-  author        = {Amemiya, K. and Ichikawa, Y. and Hayakawa, S. H. and
-                   Tanida, K. and Kim, S. H. and Oura, F. and Lee, H. I. and
-                   Saito, R. J. and Shimazaki, K. and Sasaki, R. and
-                   Nakayama, Y.},
+@article{Amemiya2026PTEP,
+  author        = {Kohki Amemiya, Yudai Ichikawa, Shuhei Hayakawa,
+                   Kiyoshi Tanida, Shin Hyung Kim, Fumiya Oura,
+                   Haein L. Hayakawa, Ryuta J. Saito, Kaito Shimazaki, 
+                   Ruri Sasaki and Yusuke Nakayama},
   title         = {Development of a Neural Network-Based Background Suppression
                    Technique for {$\Sigma N$} Cusp Spectroscopy at J-PARC},
   year          = {2026},

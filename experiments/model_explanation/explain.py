@@ -1,4 +1,5 @@
 import csv
+import gc
 import json
 import pickle
 import sys
@@ -23,17 +24,21 @@ from common import (
     create_model_from_params,
     apply_plot_style,
     DEFAULT_LABEL_MAPPING,
+    make_event_groups,
+    stratified_group_split_indices,
 )
 
 # -----------------------------------------------------------------------------
 # User-editable parameters (no YAML required)
 # -----------------------------------------------------------------------------
-# Data
-DATA_FILES = [
+# Data used to fit the model. The training partition supplies the SHAP baseline.
+TRAIN_DATA_FILES = [
     PROJECT_ROOT / "data" / "input" / "SigmaNCusp.root",
     PROJECT_ROOT / "data" / "input" / "QFLambda.root",
     PROJECT_ROOT / "data" / "input" / "QFSigmaZ.root",
 ]
+# Independent data whose model predictions are explained.
+TEST_DATA_FILE = PROJECT_ROOT / "data" / "input" / "test.root"
 TREE_NAME = "g4s2s"
 LABEL_COLUMN = "label"
 FEATURE_COLUMNS = [
@@ -51,7 +56,9 @@ FEATURE_COLUMNS = [
     "t2_dedx",
 ]
 LABEL_MAPPING = DEFAULT_LABEL_MAPPING  # remap to binary: signal=1, background=0
-SAMPLE_FRACTION = 0.01  # pool used to draw the fixed-size SHAP samples
+# These must match the split used to train ptep_demo.pth.
+VALIDATION_FRACTION = 0.2
+SPLIT_SEED = 90
 SEED = 42
 
 # Model artifacts
@@ -113,6 +120,7 @@ def _save_combined_plot(
         writer = csv.DictWriter(
             stream,
             fieldnames=["feature", *seed_columns, "mean_abs_shap", "sd_abs_shap"],
+            lineterminator="\n",
         )
         writer.writeheader()
         for feature_index, feature_name in enumerate(feature_names):
@@ -199,7 +207,7 @@ def _save_combined_plot(
         markerfacecolor="none",
         markeredgecolor="#111111",
         markeredgewidth=1.4,
-        markersize=7.5,
+        markersize=9.5,
         elinewidth=1.3,
         capsize=4.5,
         capthick=1.3,
@@ -252,21 +260,85 @@ def _normalize_shap_values(shap_values) -> np.ndarray:
     return values
 
 
-def _compute_explanation(model, X_scaled, X_raw, device, seed, feature_names):
-    """Compute one SHAP explanation using a seed-specific sample."""
-    n_required = BACKGROUND_SAMPLES + TEST_SAMPLES
-    if len(X_scaled) < n_required:
-        raise ValueError("Not enough data loaded for SHAP sampling.")
-
-    rng = np.random.default_rng(seed)
-    indices = rng.choice(len(X_scaled), n_required, replace=False)
-    background_indices = indices[:BACKGROUND_SAMPLES]
-    test_indices = indices[BACKGROUND_SAMPLES:]
-    background_data = torch.as_tensor(
-        X_scaled[background_indices], dtype=torch.float32, device=device
+def _sample_training_backgrounds(feature_names):
+    """Reproduce the model's split and sample SHAP baselines from train only."""
+    print("Loading training data for SHAP backgrounds...")
+    train_df, num_classes = load_data(
+        files=[str(path) for path in TRAIN_DATA_FILES],
+        tree_name=TREE_NAME,
+        features=feature_names,
+        label_column=LABEL_COLUMN,
+        label_mapping=LABEL_MAPPING,
+        fraction=1.0,
+        random_state=SPLIT_SEED,
+        shuffle=False,
     )
+    all_features = train_df[feature_names].values.astype(np.float32)
+    all_labels = train_df[LABEL_COLUMN].values.astype(np.int64)
+    del train_df
+
+    event_groups = make_event_groups(all_features, all_labels)
+    train_indices, validation_indices = stratified_group_split_indices(
+        all_labels,
+        event_groups,
+        VALIDATION_FRACTION,
+        SPLIT_SEED,
+        "SHAP background split",
+    )
+    if len(train_indices) < BACKGROUND_SAMPLES:
+        raise ValueError("Training partition is too small for SHAP background sampling.")
+
+    backgrounds = {}
+    for seed in SHAP_SEEDS:
+        rng = np.random.default_rng(seed)
+        selected = rng.choice(train_indices, BACKGROUND_SAMPLES, replace=False)
+        backgrounds[seed] = all_features[selected].copy()
+
+    print(f"  Training rows available    : {len(train_indices)}")
+    print(f"  Validation rows excluded   : {len(validation_indices)}")
+    del all_features, all_labels, event_groups, train_indices, validation_indices
+    gc.collect()
+    return backgrounds, num_classes
+
+
+def _load_test_features(feature_names):
+    """Load the independent test population whose predictions are explained."""
+    print("Loading independent test data for SHAP explanations...")
+    test_df, num_classes = load_data(
+        files=[str(TEST_DATA_FILE)],
+        tree_name=TREE_NAME,
+        features=feature_names,
+        label_column=LABEL_COLUMN,
+        label_mapping=LABEL_MAPPING,
+        fraction=1.0,
+        random_state=SEED,
+        shuffle=False,
+    )
+    test_features = test_df[feature_names].values.astype(np.float32)
+    del test_df
+    if len(test_features) < TEST_SAMPLES:
+        raise ValueError("Independent test data is too small for SHAP sampling.")
+    print(f"  Independent test rows      : {len(test_features)}")
+    return test_features, num_classes
+
+
+def _compute_explanation(
+    model,
+    background_scaled,
+    test_scaled,
+    test_raw,
+    device,
+    seed,
+    feature_names,
+):
+    """Explain a seed-specific test sample against a training-data baseline."""
+    rng = np.random.default_rng(seed)
+    background_data = torch.as_tensor(
+        background_scaled, dtype=torch.float32, device=device
+    )
+    test_indices = rng.choice(len(test_scaled), TEST_SAMPLES, replace=False)
     test_data = torch.as_tensor(
-        X_scaled[test_indices], dtype=torch.float32, device=device
+        test_scaled[test_indices], dtype=torch.float32, device=device
     )
 
     print(f"Computing SHAP values with seed={seed}...")
@@ -274,7 +346,7 @@ def _compute_explanation(model, X_scaled, X_raw, device, seed, feature_names):
     values = _normalize_shap_values(explainer.shap_values(test_data))
     return shap.Explanation(
         values=values,
-        data=X_raw[test_indices],
+        data=test_raw[test_indices],
         feature_names=feature_names,
     )
 
@@ -291,30 +363,20 @@ def run_explanation():
     print("---------------------")
 
     # -------------------------------------------------------------------------
-    # 2. Load Data (Sampled)
+    # 2. Load training backgrounds and independent test data
     # -------------------------------------------------------------------------
-    print("Loading data...")
-    files = [str(p) for p in DATA_FILES]
     features = FEATURE_COLUMNS
-    tree_name = TREE_NAME
-    label_column = LABEL_COLUMN
-    label_mapping = LABEL_MAPPING
-
     print(f"Features list ({len(features)}): {features}")
-
-    # Load a fraction of data. SHAP is computationally expensive.
-    df, num_classes = load_data(
-        files=files,
-        tree_name=tree_name,
-        features=features,
-        label_column=label_column,
-        label_mapping=label_mapping,
-        fraction=float(SAMPLE_FRACTION),
-        random_state=SEED,
+    background_raw_by_seed, train_num_classes = _sample_training_backgrounds(
+        features
     )
-
-    X_raw = df[features].values.astype(np.float32)
-    del df  # Free memory
+    test_raw, test_num_classes = _load_test_features(features)
+    if train_num_classes != test_num_classes:
+        raise ValueError(
+            "Training and test data resolve to different numbers of classes: "
+            f"{train_num_classes} != {test_num_classes}."
+        )
+    num_classes = train_num_classes
 
     # -------------------------------------------------------------------------
     # 3. Load Scaler & Preprocess
@@ -323,7 +385,12 @@ def run_explanation():
     with open(SCALER_PATH, "rb") as f:
         scaler = pickle.load(f)
 
-    X_scaled = scaler.transform(X_raw)
+    background_scaled_by_seed = {
+        seed: scaler.transform(background)
+        for seed, background in background_raw_by_seed.items()
+    }
+    test_scaled = scaler.transform(test_raw)
+    del background_raw_by_seed
 
     # -------------------------------------------------------------------------
     # 4. Load Model
@@ -337,7 +404,7 @@ def run_explanation():
     model = create_model_from_params(
         best_params,
         input_dim=len(features),
-        num_classes=num_classes
+        num_classes=num_classes,
     )
 
     print("Loading model weights...")
@@ -358,7 +425,15 @@ def run_explanation():
     print(f"  Test samples per seed      : {TEST_SAMPLES}")
     print(f"  SHAP sampling seeds        : {SHAP_SEEDS}")
     explanations = [
-        _compute_explanation(model, X_scaled, X_raw, device, seed, features)
+        _compute_explanation(
+            model,
+            background_scaled_by_seed[seed],
+            test_scaled,
+            test_raw,
+            device,
+            seed,
+            features,
+        )
         for seed in SHAP_SEEDS
     ]
 

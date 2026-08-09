@@ -45,36 +45,104 @@ def _epoch_axis_upper(recorded_epochs: int) -> int:
     return max(10, int(np.ceil(recorded_epochs / 10.0) * 10))
 
 
+def _mark_selected_epoch(
+    axis,
+    selected_epoch: int,
+    label_fontsize=None,
+    text_y=0.97,
+    horizontal_alignment="right",
+) -> None:
+    """Mark the epoch whose minimum validation loss selected the saved weights."""
+    axis.axvline(
+        selected_epoch,
+        color="tab:gray",
+        linestyle=(0, (4, 3)),
+        linewidth=2.2,
+        alpha=0.55,
+        zorder=1,
+    )
+    axis.text(
+        selected_epoch - 1.2,
+        text_y,
+        "selected epoch",
+        transform=axis.get_xaxis_transform(),
+        rotation=90,
+        rotation_mode="anchor",
+        ha=horizontal_alignment,
+        va="center",
+        fontsize=label_fontsize,
+        color="tab:gray",
+    )
 def _plot_training_curves(history, out_path: Path, f1_ylim, loss_ylim):
     import matplotlib.pyplot as plt
 
     apply_plot_style()
 
     fig = plt.figure(figsize=(10, 4))
+    legend_fontsize = plt.rcParams["legend.fontsize"]
 
     plt.subplot(1, 2, 1)
     epoch_values = np.arange(1, len(history["train_f1"]) + 1)
     epoch_upper = _epoch_axis_upper(len(epoch_values))
-    plt.plot(epoch_values, history["train_f1"], c="blue", label="train", linestyle="-")
-    plt.plot(epoch_values, history["val_f1"], c="red", label="val", linestyle="-")
-    plt.legend()
+    selected_epoch = int(np.argmin(history["val_loss"]) + 1)
+    plt.plot(
+        epoch_values,
+        history["train_f1"],
+        c="tab:blue",
+        label="train",
+        linestyle="-",
+    )
+    plt.plot(
+        epoch_values,
+        history["val_f1"],
+        c="tab:red",
+        label="val",
+        linestyle="-",
+    )
+    plt.legend(loc="lower right", fontsize=legend_fontsize)
     plt.xlabel("epoch")
     plt.ylabel("F1-score")
     plt.title("Training and validation F1-score")
     plt.xlim(0, epoch_upper)
     plt.ylim(*f1_ylim)
     plt.grid()
+    _mark_selected_epoch(
+        plt.gca(),
+        selected_epoch,
+        label_fontsize=legend_fontsize,
+        text_y=0.03,
+        horizontal_alignment="left",
+    )
 
     plt.subplot(1, 2, 2)
-    plt.plot(epoch_values, history["train_loss"], c="blue", label="train", linestyle="-")
-    plt.plot(epoch_values, history["val_loss"], c="red", label="val", linestyle="-")
-    plt.legend()
+    plt.plot(
+        epoch_values,
+        history["train_loss"],
+        c="tab:blue",
+        label="train",
+        linestyle="-",
+    )
+    plt.plot(
+        epoch_values,
+        history["val_loss"],
+        c="tab:red",
+        label="val",
+        linestyle="-",
+    )
+    plt.legend(loc="upper right", fontsize=legend_fontsize)
     plt.xlabel("epoch")
     plt.ylabel("loss")
     plt.title("Training and validation loss")
     plt.xlim(0, epoch_upper)
     plt.ylim(*loss_ylim)
     plt.grid()
+    _mark_selected_epoch(
+        plt.gca(),
+        selected_epoch,
+        label_fontsize=legend_fontsize,
+        text_y=0.97,
+        horizontal_alignment="right",
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()

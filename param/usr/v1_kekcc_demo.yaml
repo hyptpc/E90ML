@@ -136,8 +136,8 @@ training:
   best_params_file: ptep_demo.json
   history_output_file: ptep_demo_train_history.csv
   plot_output_file: ptep_demo_train_history.png
-  f1_ylim: [0.7, 0.8]
-  loss_ylim: [0.5, 0.6]
+  f1_ylim: [0.74, 0.77]
+  loss_ylim: [0.50, 0.55]
   data_summary_file: ptep_demo_training_data.json
 
 # -----------------------------------------------------------------------------
